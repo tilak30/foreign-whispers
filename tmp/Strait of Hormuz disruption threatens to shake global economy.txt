@@ -1,0 +1,170 @@
+{"text": "60 Minutes overtime.", "start": 2.32, "duration": 3.8}
+{"text": "What's the worst case scenario that", "start": 6.48, "duration": 3.76}
+{"text": "you're worried about is that it is", "start": 8.0, "duration": 4.4}
+{"text": "closed for weeks and weeks and weeks", "start": 10.24, "duration": 5.519}
+{"text": "here and you start to see the global", "start": 12.4, "duration": 5.84}
+{"text": "economy really being impacted because", "start": 15.759, "duration": 4.881}
+{"text": "the it is the lifeblood to a certain", "start": 18.24, "duration": 4.56}
+{"text": "extent. So the reality is the longer", "start": 20.64, "duration": 3.92}
+{"text": "that this goes on, the greater impact", "start": 22.8, "duration": 3.84}
+{"text": "it's going to have across industries,", "start": 24.56, "duration": 4.719}
+{"text": "across regions. This week on 60 Minutes,", "start": 26.64, "duration": 4.799}
+{"text": "we report on the Straight of Hormuz,", "start": 29.279, "duration": 4.561}
+{"text": "that narrow waterway on Iran's southern", "start": 31.439, "duration": 4.481}
+{"text": "coast. It connects the oil richch", "start": 33.84, "duration": 4.0}
+{"text": "countries of the Persian Gulf to the", "start": 35.92, "duration": 4.319}
+{"text": "rest of the world. The ships that pass", "start": 37.84, "duration": 4.559}
+{"text": "through it carry a fifth of the world's", "start": 40.239, "duration": 4.881}
+{"text": "oil and a significant amount of natural", "start": 42.399, "duration": 5.361}
+{"text": "gas. Now, with that traffic nearly", "start": 45.12, "duration": 5.04}
+{"text": "stopped by the war in Iran, the world is", "start": 47.76, "duration": 4.959}
+{"text": "beginning to feel the impact from energy", "start": 50.16, "duration": 5.6}
+{"text": "markets to national economies. You can", "start": 52.719, "duration": 5.281}
+{"text": "see that there's a lot of movement here,", "start": 55.76, "duration": 2.88}
+{"text": "right?", "start": 58.0, "duration": 3.039}
+{"text": ">> We spoke with Matt Smith, an oil market", "start": 58.64, "duration": 5.04}
+{"text": "analyst for Kepler, which tracks global", "start": 61.039, "duration": 5.12}
+{"text": "trade and shipping. He has been studying", "start": 63.68, "duration": 5.119}
+{"text": "ship movement in the straight of Hormuz.", "start": 66.159, "duration": 4.96}
+{"text": "Smith told us the region moves millions", "start": 68.799, "duration": 5.36}
+{"text": "of barrels of oil a day. For most Gulf", "start": 71.119, "duration": 5.201}
+{"text": "states, the only way for their oil to", "start": 74.159, "duration": 4.161}
+{"text": "reach the global market is through the", "start": 76.32, "duration": 4.64}
+{"text": "strait. So, these supplies are stuck", "start": 78.32, "duration": 4.88}
+{"text": "because of the conflict. But Saudi", "start": 80.96, "duration": 4.56}
+{"text": "Arabia benefits from decades of good", "start": 83.2, "duration": 3.279}
+{"text": "planning.", "start": 85.52, "duration": 2.88}
+{"text": ">> Saudi Arabia is a relative winner from", "start": 86.479, "duration": 4.32}
+{"text": "this situation in that it has a pipeline", "start": 88.4, "duration": 4.399}
+{"text": "called the East West pipeline that was", "start": 90.799, "duration": 4.0}
+{"text": "built for exactly this reason. It was", "start": 92.799, "duration": 3.441}
+{"text": "concerned about the straight of Hormuz", "start": 94.799, "duration": 4.241}
+{"text": "being uh this choke point and so that", "start": 96.24, "duration": 5.44}
+{"text": "pipe goes across to the Red Sea to Yanu", "start": 99.04, "duration": 4.24}
+{"text": "and we're starting to see exports", "start": 101.68, "duration": 3.36}
+{"text": "picking up from there instead. So", "start": 103.28, "duration": 3.519}
+{"text": "essentially Saudi Arabia is able to", "start": 105.04, "duration": 4.32}
+{"text": "reroute its crude to be able to load in", "start": 106.799, "duration": 5.36}
+{"text": "the Red Sea whereas the likes of Iraq,", "start": 109.36, "duration": 5.439}
+{"text": "Kuwait and Qatar don't have the ability", "start": 112.159, "duration": 4.401}
+{"text": "to do that. So they're having to shut in", "start": 114.799, "duration": 3.92}
+{"text": "production. Not that Saudi Arabia is to", "start": 116.56, "duration": 3.839}
+{"text": "able to completely move all of its", "start": 118.719, "duration": 3.121}
+{"text": "barrels and export them from the other", "start": 120.399, "duration": 4.481}
+{"text": "side. Uh but it it can do nearly 4", "start": 121.84, "duration": 4.8}
+{"text": "million barrels a day.", "start": 124.88, "duration": 3.2}
+{"text": ">> How would you characterize what's", "start": 126.64, "duration": 3.759}
+{"text": "happening in the street of Hormuz today?", "start": 128.08, "duration": 4.56}
+{"text": "Well, we are seeing a collapse of a", "start": 130.399, "duration": 5.92}
+{"text": "keystone assumption in economics and", "start": 132.64, "duration": 6.72}
+{"text": "energy markets. And if Hormuz is shut", "start": 136.319, "duration": 5.521}
+{"text": "for a month, one of the most important", "start": 139.36, "duration": 6.64}
+{"text": "bedrock assumptions and how the economy", "start": 141.84, "duration": 5.68}
+{"text": "works, the global economy works and", "start": 146.0, "duration": 3.76}
+{"text": "about security will have collapsed.", "start": 147.52, "duration": 4.48}
+{"text": ">> Bob McN was an energy adviser to", "start": 149.76, "duration": 4.72}
+{"text": "President George W. Bush during the Iraq", "start": 152.0, "duration": 5.44}
+{"text": "war, who now advises clients on oil and", "start": 154.48, "duration": 5.92}
+{"text": "gas markets. He told us the disruption", "start": 157.44, "duration": 5.519}
+{"text": "is already having global impacts,", "start": 160.4, "duration": 4.479}
+{"text": "including in Russia.", "start": 162.959, "duration": 4.401}
+{"text": ">> This conflict and the oil price increase", "start": 164.879, "duration": 5.44}
+{"text": "has done two things to help Putin. One,", "start": 167.36, "duration": 5.12}
+{"text": "it's lifted the overall price of crude", "start": 170.319, "duration": 5.441}
+{"text": "oil. And secondly, it's eliminated that", "start": 172.48, "duration": 6.32}
+{"text": "discount, that penalty price that he had", "start": 175.76, "duration": 5.839}
+{"text": "to pay. Now everybody wants his oil. And", "start": 178.8, "duration": 4.719}
+{"text": "yeah, Christmas came early for Putin. So", "start": 181.599, "duration": 4.56}
+{"text": "Putin may be benefiting temporarily from", "start": 183.519, "duration": 8.321}
+{"text": "a budget windfall, but long-term if Iran", "start": 186.159, "duration": 8.401}
+{"text": "uh stops being the world's top sponsor", "start": 191.84, "duration": 5.44}
+{"text": "as terror and even uh becomes a friend", "start": 194.56, "duration": 4.08}
+{"text": "of the United States and Israel and", "start": 197.28, "duration": 3.36}
+{"text": "other countries, which I I hope and", "start": 198.64, "duration": 4.4}
+{"text": "expect eventually, um that's a bad day", "start": 200.64, "duration": 4.879}
+{"text": "for Russia. Very bad day for for Putin.", "start": 203.04, "duration": 4.4}
+{"text": "But today", "start": 205.519, "duration": 4.161}
+{"text": "uh as things stand in the street of", "start": 207.44, "duration": 4.48}
+{"text": "Hormuz, I've seen it said that Russia is", "start": 209.68, "duration": 4.32}
+{"text": "the clear winner in this war.", "start": 211.92, "duration": 4.48}
+{"text": ">> Putin, no question, is benefiting from", "start": 214.0, "duration": 4.56}
+{"text": "much greater revenue right now. Y", "start": 216.4, "duration": 4.24}
+{"text": ">> I want to ask you about China. About", "start": 218.56, "duration": 5.039}
+{"text": "half of China's imported oil comes", "start": 220.64, "duration": 5.04}
+{"text": "through the strait. What does this mean", "start": 223.599, "duration": 3.92}
+{"text": "for their economy?", "start": 225.68, "duration": 3.839}
+{"text": ">> This is a a real gut punch for their", "start": 227.519, "duration": 4.401}
+{"text": "economy. China was getting a sweetheart", "start": 229.519, "duration": 6.64}
+{"text": "deal from Iran and uh and depending", "start": 231.92, "duration": 7.2}
+{"text": "heavily on flow from Hormuz. The thought", "start": 236.159, "duration": 4.961}
+{"text": "that that could be disrupted for a", "start": 239.12, "duration": 4.16}
+{"text": "prolonged period is devastating for the", "start": 241.12, "duration": 5.52}
+{"text": "Chinese economy. Now, they have", "start": 243.28, "duration": 5.519}
+{"text": "stockpiled a lot of oil and so they're", "start": 246.64, "duration": 3.44}
+{"text": "pretty well supplied in terms of", "start": 248.799, "duration": 3.44}
+{"text": "physical supply, but the economic cost", "start": 250.08, "duration": 4.799}
+{"text": "will be quite sharp to them.", "start": 252.239, "duration": 5.28}
+{"text": ">> Even so, China is still benefiting from", "start": 254.879, "duration": 5.281}
+{"text": "its relationship with Iran. Matt Smith", "start": 257.519, "duration": 4.96}
+{"text": "at Kepler told us that Iran has", "start": 260.16, "duration": 4.24}
+{"text": "continued to sneak oil out of the", "start": 262.479, "duration": 4.081}
+{"text": "straight. He says they've done it by", "start": 264.4, "duration": 4.32}
+{"text": "turning off their ship's transponders", "start": 266.56, "duration": 4.4}
+{"text": "that show their location, passing", "start": 268.72, "duration": 4.479}
+{"text": "through the straight undetected and", "start": 270.96, "duration": 4.64}
+{"text": "sending most of the crude oil on board", "start": 273.199, "duration": 4.961}
+{"text": "straight to China. That oil is going to", "start": 275.6, "duration": 2.96}
+{"text": "China.", "start": 278.16, "duration": 1.68}
+{"text": ">> Yeah.", "start": 278.56, "duration": 3.359}
+{"text": ">> Let's talk about India. India had been", "start": 279.84, "duration": 3.68}
+{"text": "under significant pressure from the US", "start": 281.919, "duration": 3.84}
+{"text": "to stop buying Russian oil. What's the", "start": 283.52, "duration": 5.92}
+{"text": "case now? India overall is hugely", "start": 285.759, "duration": 7.121}
+{"text": "dependent on uh hormuse flows. It does", "start": 289.44, "duration": 5.759}
+{"text": "not have extensive strategic stocks like", "start": 292.88, "duration": 4.48}
+{"text": "China does like the United States does.", "start": 295.199, "duration": 4.881}
+{"text": "India also requires liqufied petroleum", "start": 297.36, "duration": 5.76}
+{"text": "gas. It's cooking fuel. Families cook", "start": 300.08, "duration": 5.2}
+{"text": "with LPG liqufied petroleum gas that", "start": 303.12, "duration": 3.519}
+{"text": "comes from Hormuz and they don't have", "start": 305.28, "duration": 3.6}
+{"text": "big stock piles. So for India this is an", "start": 306.639, "duration": 3.84}
+{"text": "acute crisis.", "start": 308.88, "duration": 3.36}
+{"text": ">> In other words, what's happening in the", "start": 310.479, "duration": 4.241}
+{"text": "street of Hormuz impacts the entire", "start": 312.24, "duration": 5.6}
+{"text": "world. In the United States, gas prices", "start": 314.72, "duration": 5.6}
+{"text": "have already jumped by more than 65", "start": 317.84, "duration": 5.199}
+{"text": "cents a gallon since the war started.", "start": 320.32, "duration": 5.28}
+{"text": "And in Asia, which gets most of its oil", "start": 323.039, "duration": 4.641}
+{"text": "through the straight, countries like", "start": 325.6, "duration": 5.439}
+{"text": "Thailand, Pakistan, and Bangladesh are", "start": 327.68, "duration": 5.6}
+{"text": "already dealing with fuel shortages and", "start": 331.039, "duration": 4.72}
+{"text": "long lines at gas stations as drivers", "start": 333.28, "duration": 5.68}
+{"text": "try to fill up. Jet and diesel fuel", "start": 335.759, "duration": 7.201}
+{"text": "prices have also surged, up 25%.", "start": 338.96, "duration": 6.56}
+{"text": "And as a result, higher plane tickets", "start": 342.96, "duration": 4.959}
+{"text": "and grocery prices are expected to", "start": 345.52, "duration": 4.0}
+{"text": "follow.", "start": 347.919, "duration": 3.201}
+{"text": "Give it to me straight. What is the", "start": 349.52, "duration": 3.84}
+{"text": "worstc case scenario that you are", "start": 351.12, "duration": 3.359}
+{"text": "predicting here?", "start": 353.36, "duration": 3.679}
+{"text": ">> I'm predicting that this is going to get", "start": 354.479, "duration": 4.401}
+{"text": "worse before it gets better. This is", "start": 357.039, "duration": 3.201}
+{"text": "going to be a longer and costier", "start": 358.88, "duration": 2.879}
+{"text": "conflict than just about everybody", "start": 360.24, "duration": 2.48}
+{"text": "expected.", "start": 361.759, "duration": 3.841}
+{"text": ">> You have said that a prolonged closure", "start": 362.72, "duration": 4.8}
+{"text": "of the street of Hormuz is a guaranteed", "start": 365.6, "duration": 4.08}
+{"text": "global recession. Do you still stand by", "start": 367.52, "duration": 2.48}
+{"text": "that?", "start": 369.68, "duration": 2.56}
+{"text": ">> Look, yes. the the world economy cannot", "start": 370.0, "duration": 5.759}
+{"text": "grow without 20% of its energy supply.", "start": 372.24, "duration": 4.48}
+{"text": "Period.", "start": 375.759, "duration": 4.401}
+{"text": ">> Rarely do we recognize history in the", "start": 376.72, "duration": 5.199}
+{"text": "making. But is that what we are", "start": 380.16, "duration": 3.52}
+{"text": "witnessing right now? We're sitting in", "start": 381.919, "duration": 5.681}
+{"text": "the middle of an unprecedented time.", "start": 383.68, "duration": 7.68}
+{"text": ">> Yes, we we are experiencing a just as a", "start": 387.6, "duration": 7.36}
+{"text": "factual matter the biggest energy", "start": 391.36, "duration": 6.72}
+{"text": "disruption in history.", "start": 394.96, "duration": 6.32}
+{"text": "Um, we have to just hope and pray that", "start": 398.08, "duration": 7.72}
+{"text": "it doesn't go on for too much longer.", "start": 401.28, "duration": 4.52}

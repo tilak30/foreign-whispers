@@ -9,3 +9,7 @@ docs/
 *.mov
 *.webm
 .env
+pipeline_data/
+raw_videos/
+raw_captions/
+tmp/

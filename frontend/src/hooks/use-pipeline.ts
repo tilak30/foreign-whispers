@@ -197,6 +197,8 @@ export function usePipeline() {
       
       if (settings.diarization.length > 0) {
         await run("diarize", () => diarizeVideo(dl.video_id));
+      } else {
+        dispatch({ type: "STAGE_COMPLETE", stage: "diarize", result: null, duration_ms: 0, skipped: true });
       }
       
       await run("translate", () => translateVideo(dl.video_id, "es"));

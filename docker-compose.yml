@@ -53,7 +53,7 @@ services:
   # The API container is CPU-only. It delegates GPU work to the STT
   # and TTS containers above via HTTP.
   api:
-    container_name: foreign-whispers-api
+    container_name: foreign-whispers-api-local-2
     profiles: [nvidia, cpu]
     build:
       context: .
@@ -80,11 +80,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        API_URL: "${API_URL:-http://api:8080}"
     restart: unless-stopped
     ports:
       - "8501:8501"
     environment:
-      - API_URL=http://api:8080
+      - API_URL=${API_URL:-http://api:8080}
       - HOSTNAME=0.0.0.0
       - PORT=8501
     healthcheck:
