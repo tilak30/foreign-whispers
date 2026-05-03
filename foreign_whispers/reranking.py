@@ -260,6 +260,7 @@ def get_shorter_translations(
         return []
 
     baseline_norm = _normalize_ws(baseline_es)
+    baseline_duration_s = _estimate_duration(baseline_norm) if baseline_norm else float("inf")
     budget_s = max(0.05, float(target_duration_s) * float(duration_slack))
 
     raw_pairs = _collect_backend_candidates(source_text)
@@ -270,10 +271,15 @@ def get_shorter_translations(
         if txt in seen:
             continue
         seen.add(txt)
-        # Only suggest replacements that are strictly shorter than the baseline (in chars).
-        if baseline_norm and len(txt) >= len(baseline_norm):
+        txt_duration = _estimate_duration(txt)
+        # Accept any candidate whose predicted TTS duration is strictly shorter
+        # than the baseline AND fits within the time budget.
+        # Previously gated on character count, which rejected valid shorter
+        # translations with fewer syllables but same/more characters (e.g.
+        # MarianMT outputs that use shorter words but longer spellings).
+        if txt_duration >= baseline_duration_s:
             continue
-        if _estimate_duration(txt) > budget_s:
+        if txt_duration > budget_s:
             continue
         candidates.append(
             TranslationCandidate(text=txt, char_count=len(txt), brevity_rationale=rationale)

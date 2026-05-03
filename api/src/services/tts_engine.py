@@ -33,7 +33,13 @@ def _log_tts_issue_once(kind: str, msg: str) -> None:
 _ALIGNMENT_ENABLED = os.getenv("FW_ALIGNMENT", "on").lower() != "off"
 
 SPEED_MIN = 0.75
-SPEED_MAX = 1.25
+# 1.35× is the upper bound for pyrubberband quality — beyond this, artifacts
+# become perceptible. The previous 1.25 was too conservative: Spanish typically
+# runs 20–30% longer than English, so many segments were getting hard-trimmed
+# (speech cut off) rather than being slightly sped up.
+# If a segment still overflows at 1.35×, REQUEST_SHORTER in alignment will have
+# already tried a shorter translation — the trim is the absolute last resort.
+SPEED_MAX = 1.35
 # When TTS audio is less than this fraction of the target window, skip
 # time-stretching entirely — play at natural speed and pad with silence.
 # Prevents comically slow speech in windows with long narrator pauses.
@@ -189,8 +195,14 @@ class EdgeTTSClient:
     ``"male"`` / ``"female"`` / ``None``.
     """
 
+    # Silence threshold for stripping MP3 encoder predelay (dBFS).
+    # Edge TTS MP3 output typically has 30–50ms of near-silence at the start
+    # from the MP3 encoder frame boundary. Stripping it prevents every segment
+    # from starting a beat late and accumulating drift over the full clip.
+    _PREDELAY_STRIP_DBFS = -50.0
+    _PREDELAY_MAX_STRIP_MS = 120  # never strip more than this
+
     def tts_to_file(self, text: str, file_path: str, **kwargs) -> None:
-        import asyncio
         import edge_tts
 
         gender = (kwargs.get("gender") or "").lower()
@@ -203,23 +215,37 @@ class EdgeTTSClient:
 
         async def _run():
             communicate = edge_tts.Communicate(text, voice)
-            # edge-tts produces MP3; we need WAV — convert via pydub
             mp3_path = file_path + ".mp3"
             await communicate.save(mp3_path)
             audio = AudioSegment.from_mp3(mp3_path)
+            # Strip MP3 encoder predelay — pydub's from_mp3 preserves the
+            # ~576-sample encoder silence that precedes the first audio frame.
+            # This causes every segment to start late, compounding into seconds
+            # of drift over a full video.
+            audio = self._strip_leading_silence(audio)
             audio.export(file_path, format="wav")
             pathlib.Path(mp3_path).unlink(missing_ok=True)
 
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                    ex.submit(asyncio.run, _run()).result()
-            else:
-                loop.run_until_complete(_run())
-        except RuntimeError:
-            asyncio.run(_run())
+        # Always run in a fresh thread to avoid event-loop conflicts when called
+        # from inside a ThreadPoolExecutor (which may or may not have a loop).
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+            ex.submit(asyncio.run, _run()).result()
+
+    def _strip_leading_silence(self, audio: AudioSegment) -> AudioSegment:
+        """Remove leading near-silence (MP3 predelay) from a pydub AudioSegment."""
+        chunk_ms = 5
+        stripped_ms = 0
+        while stripped_ms < self._PREDELAY_MAX_STRIP_MS:
+            chunk = audio[stripped_ms : stripped_ms + chunk_ms]
+            if len(chunk) < chunk_ms:
+                break
+            if chunk.dBFS > self._PREDELAY_STRIP_DBFS:
+                break
+            stripped_ms += chunk_ms
+        if stripped_ms > 0:
+            return audio[stripped_ms:]
+        return audio
 
 
 def _make_coqui_tts_engine():
@@ -480,18 +506,21 @@ def _load_en_transcript(es_source_path: str) -> dict:
         return json.load(f)
 
 
-def _build_alignment(en_transcript: dict, es_transcript: dict) -> tuple:
-    """Run global_align and return (metrics_list, {segment_index: AlignedSegment}).
+def _build_alignment(en_transcript: dict, es_transcript: dict, silence_regions: list[dict] | None = None) -> tuple:
+    """Run global_align_dp and return (metrics_list, {segment_index: AlignedSegment}).
 
     Returns ([], {}) if the alignment library is unavailable or fails.
+    Uses DP beam search (global_align_dp) over the greedy pass so gap-shift
+    decisions are made globally, not just left-to-right.
     """
     try:
-        from foreign_whispers.alignment import compute_segment_metrics, global_align
+        from foreign_whispers.alignment import compute_segment_metrics, global_align_dp
     except ImportError:
         return [], {}
     try:
         metrics = compute_segment_metrics(en_transcript, es_transcript)
-        aligned = global_align(metrics, silence_regions=[])
+        regions = silence_regions or []
+        aligned = global_align_dp(metrics, silence_regions=regions)
         return metrics, {seg.index: seg for seg in aligned}
     except Exception as exc:
         print(f"[tts] alignment failed ({exc}), proceeding without alignment")
@@ -625,6 +654,9 @@ def text_file_to_speech(
 
     # Apply YouTube caption timing offset
     offset = _compute_speech_offset(source_path)
+    # Clamp to zero — a negative offset (Whisper starts before YouTube caption)
+    # would shift all segment start times backwards and corrupt the timeline.
+    offset = max(0.0, offset)
     if offset > 0:
         print(f" (applying {offset:.1f}s speech offset)", end="")
 
@@ -640,8 +672,22 @@ def text_file_to_speech(
         else {}
     )
     en_transcript = _load_en_transcript(source_path)
+    # Detect silence regions from the source audio for gap-shift alignment.
+    # VAD gives the alignment pass real inter-segment pause information so it
+    # can route segments to GAP_SHIFT instead of REQUEST_SHORTER unnecessarily.
+    _silence_regions: list[dict] = []
     if use_alignment:
-        _metrics_list, align_map = _build_alignment(en_transcript, es_transcript)
+        try:
+            from foreign_whispers.vad import detect_silence_regions
+            # Source audio: same path as the source video but as WAV in the same data_dir
+            data_dir = pathlib.Path(source_path).parent.parent.parent
+            audio_candidates = list((data_dir / "audio").glob(f"{pathlib.Path(source_path).stem}*.wav"))
+            if audio_candidates:
+                _silence_regions = detect_silence_regions(str(audio_candidates[0]))
+        except Exception as exc:
+            print(f"[tts] VAD silence detection skipped ({exc})")
+    if use_alignment:
+        _metrics_list, align_map = _build_alignment(en_transcript, es_transcript, _silence_regions)
     else:
         _metrics_list, align_map = [], {}
     _aligned_list = list(align_map.values())
@@ -748,7 +794,18 @@ def text_file_to_speech(
 
         for m in seg_metas:
             i = m["index"]
-            start_ms = int((m["start"] + offset) * 1000)
+            aligned_seg = m["aligned_seg"]
+
+            # Use DP-aligned scheduled_start when available so gap-shift decisions
+            # made by global_align_dp are actually reflected in the output timeline.
+            # Fall back to raw segment start + offset when alignment is disabled.
+            if aligned_seg is not None and use_alignment:
+                start_ms = int((aligned_seg.scheduled_start + offset) * 1000)
+            else:
+                start_ms = int((m["start"] + offset) * 1000)
+            # Never go backwards — if alignment pushed a segment before cursor,
+            # clamp to current position rather than corrupting the timeline.
+            start_ms = max(start_ms, cursor_ms)
 
             if start_ms > cursor_ms:
                 combined += AudioSegment.silent(duration=start_ms - cursor_ms)
@@ -759,7 +816,6 @@ def text_file_to_speech(
                 use_alignment, tmpdir,
             )
 
-            aligned_seg = m["aligned_seg"]
             segment_details.append({
                 "index": i,
                 "text": m["text"],
@@ -768,11 +824,20 @@ def text_file_to_speech(
                 "raw_duration_s": round(seg_raw_duration, 3),
                 "speed_factor": round(seg_speed_factor, 3),
                 "action": aligned_seg.action.value if aligned_seg and hasattr(aligned_seg, "action") else "unknown",
+                "scheduled_start_s": round(aligned_seg.scheduled_start, 3) if aligned_seg else round(m["start"], 3),
             })
 
             if seg_audio is not None:
                 combined += seg_audio
                 cursor_ms += len(seg_audio)
+            else:
+                # Even when seg_audio is None (silence pad from _postprocess_segment),
+                # the cursor must advance by the target window so subsequent segments
+                # don't collapse into the same position and overlap.
+                target_ms = int(m["target_sec"] * 1000)
+                if target_ms > 0:
+                    combined += AudioSegment.silent(duration=target_ms)
+                    cursor_ms += target_ms
 
         save_path = pathlib.Path(output_path) / save_name
         combined.export(str(save_path), format="wav")
