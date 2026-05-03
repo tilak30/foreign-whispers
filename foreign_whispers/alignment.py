@@ -38,7 +38,8 @@ _SYLLABLE_RATE = 4.5  # syllables per second for Romance languages
 
 def _estimate_duration(text: str) -> float:
     """Estimate TTS duration in seconds using a syllable-rate heuristic."""
-    return _count_syllables(text) / _SYLLABLE_RATE
+    # A slightly better heuristic as requested by the assignment
+    return 0.4 + (_count_syllables(text) / 4.2)
 
 
 @dataclasses.dataclass

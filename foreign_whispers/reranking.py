@@ -158,9 +158,43 @@ def get_shorter_translations(
         Empty list (stub).  Implement to return ``TranslationCandidate`` items.
     """
     logger.info(
-        "get_shorter_translations called for %.1fs budget (%d chars baseline) — "
-        "returning empty list (student assignment stub).",
+        "get_shorter_translations called for %.1fs budget (%d chars baseline).",
         target_duration_s,
         len(baseline_es),
     )
-    return []
+    import re
+    replacements = {
+        r"\ben este momento\b": "ahora",
+        r"\bde la misma manera\b": "igual",
+        r"\bpor lo tanto\b": "así",
+        r"\bno obstante\b": "pero",
+        r"\bsin embargo\b": "pero",
+        r"\bpara poder\b": "para",
+        r"\ba pesar de que\b": "aunque",
+        r"\bde acuerdo con\b": "según",
+        r"\bpor el hecho de que\b": "porque",
+    }
+    candidates = []
+    shortened = baseline_es
+    for pattern, repl in replacements.items():
+        shortened = re.sub(pattern, repl, shortened, flags=re.IGNORECASE)
+    
+    if shortened != baseline_es:
+        candidates.append(TranslationCandidate(
+            text=shortened,
+            char_count=len(shortened),
+            brevity_rationale="rule-based truncation"
+        ))
+    
+    fillers = r"\b(bueno|pues|entonces|claro|ya sabes)\b"
+    no_fillers = re.sub(fillers, "", shortened, flags=re.IGNORECASE)
+    no_fillers = re.sub(r"\s+", " ", no_fillers).strip()
+    if no_fillers != shortened and no_fillers:
+        candidates.append(TranslationCandidate(
+            text=no_fillers,
+            char_count=len(no_fillers),
+            brevity_rationale="removed filler words"
+        ))
+
+    candidates.sort(key=lambda x: abs(x.char_count / 15.0 - target_duration_s))
+    return candidates
