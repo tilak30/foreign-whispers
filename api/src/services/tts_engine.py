@@ -170,7 +170,60 @@ class ChatterboxClient:
         return chunks if chunks else [text]
 
 
+# ── Edge TTS voice mapping ─────────────────────────────────────────────
+# Microsoft neural voices — free, no API key, excellent quality.
+# Pick gender by checking the diarization label stored on a segment.
+_EDGE_VOICE_MALE   = os.getenv("FW_EDGE_VOICE_MALE",   "es-ES-AlvaroNeural")
+_EDGE_VOICE_FEMALE = os.getenv("FW_EDGE_VOICE_FEMALE", "es-ES-ElviraNeural")
+_EDGE_VOICE_DEFAULT = _EDGE_VOICE_MALE  # fallback when gender unknown
+
+
+class EdgeTTSClient:
+    """Free Microsoft neural TTS via the edge-tts package.
+
+    Requires no API key.  Uses gender-specific Spanish voices:
+    - Male:   es-ES-AlvaroNeural  (or FW_EDGE_VOICE_MALE env var)
+    - Female: es-ES-ElviraNeural  (or FW_EDGE_VOICE_FEMALE env var)
+
+    The ``gender`` kwarg accepted by ``tts_to_file`` should be
+    ``"male"`` / ``"female"`` / ``None``.
+    """
+
+    def tts_to_file(self, text: str, file_path: str, **kwargs) -> None:
+        import asyncio
+        import edge_tts
+
+        gender = (kwargs.get("gender") or "").lower()
+        if gender == "female":
+            voice = _EDGE_VOICE_FEMALE
+        elif gender == "male":
+            voice = _EDGE_VOICE_MALE
+        else:
+            voice = _EDGE_VOICE_DEFAULT
+
+        async def _run():
+            communicate = edge_tts.Communicate(text, voice)
+            # edge-tts produces MP3; we need WAV — convert via pydub
+            mp3_path = file_path + ".mp3"
+            await communicate.save(mp3_path)
+            audio = AudioSegment.from_mp3(mp3_path)
+            audio.export(file_path, format="wav")
+            pathlib.Path(mp3_path).unlink(missing_ok=True)
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    ex.submit(asyncio.run, _run()).result()
+            else:
+                loop.run_until_complete(_run())
+        except RuntimeError:
+            asyncio.run(_run())
+
+
 def _make_coqui_tts_engine():
+
     """Local Coqui TTS (Spanish tacotron). Uses CUDA if present, otherwise CPU."""
 
     import functools
@@ -190,15 +243,25 @@ def _make_coqui_tts_engine():
 
 
 def _make_tts_engine():
-    """Create TTS engine: Chatterbox API client if server is reachable, else local Coqui.
+    """Create TTS engine: Chatterbox → EdgeTTS → Coqui.
 
-    Tries Chatterbox with a real /v1/audio/speech test call
-    to ensure the model is fully loaded before committing.
+    Priority:
+      1. Chatterbox GPU server (if reachable and FW_TTS_ENGINE not overridden)
+      2. Edge TTS (Microsoft neural, free, gender-aware)  ← default local fallback
+      3. Coqui Tacotron2 (offline CPU, robotic but works air-gapped)
+
+    Force a specific engine via FW_TTS_ENGINE env var:
+      FW_TTS_ENGINE=edge    → Edge TTS only
+      FW_TTS_ENGINE=coqui   → Coqui only
+      FW_TTS_ENGINE=local   → Coqui only (alias)
     """
 
-    force_local = os.getenv("FW_TTS_ENGINE", "").strip().lower()
-    if force_local in ("coqui", "local", "cpu"):
-        print(f"[tts] FW_TTS_ENGINE={force_local!r} — skipping Chatterbox, using bundled Coqui")
+    force = os.getenv("FW_TTS_ENGINE", "").strip().lower()
+    if force == "edge":
+        print("[tts] FW_TTS_ENGINE=edge — using Edge TTS (Microsoft neural)")
+        return EdgeTTSClient()
+    if force in ("coqui", "local", "cpu"):
+        print(f"[tts] FW_TTS_ENGINE={force!r} — using bundled Coqui")
         return _make_coqui_tts_engine()
 
     skip_probe = os.getenv("FW_CHATTERBOX_SKIP_HEAVY_PROBE", "").lower() in ("1", "true", "yes")
@@ -214,9 +277,18 @@ def _make_tts_engine():
         print(f"[tts] Using Chatterbox GPU server at {CHATTERBOX_API_URL}")
         return client
     except Exception as exc:
-        print(f"[tts] Chatterbox not available ({exc}), falling back to local Coqui")
+        print(f"[tts] Chatterbox not available ({exc}), falling back to Edge TTS")
+
+    # Try Edge TTS (free Microsoft neural voices, requires internet)
+    try:
+        import edge_tts  # noqa: F401
+        print("[tts] Using Edge TTS (Microsoft neural, gender-aware Spanish voices)")
+        return EdgeTTSClient()
+    except ImportError:
+        print("[tts] edge-tts not installed, falling back to Coqui")
 
     return _make_coqui_tts_engine()
+
 
 
 _tts_engine = None
@@ -298,6 +370,7 @@ def _synthesize_raw(
     wav_path: str,
     *,
     speaker_wav: str | None = None,
+    gender: str | None = None,
 ) -> bytes | None:
     """GPU-bound: call TTS engine and return raw WAV bytes, or None on failure."""
     if not text or not text.strip():
@@ -305,11 +378,11 @@ def _synthesize_raw(
     try:
         if speaker_wav:
             try:
-                tts_engine.tts_to_file(text=text, file_path=wav_path, speaker_wav=speaker_wav)
+                tts_engine.tts_to_file(text=text, file_path=wav_path, speaker_wav=speaker_wav, gender=gender)
             except TypeError:
-                tts_engine.tts_to_file(text=text, file_path=wav_path)
+                tts_engine.tts_to_file(text=text, file_path=wav_path, gender=gender)
         else:
-            tts_engine.tts_to_file(text=text, file_path=wav_path)
+            tts_engine.tts_to_file(text=text, file_path=wav_path, gender=gender)
         return pathlib.Path(wav_path).read_bytes()
     except Exception as exc:
         print(f"[tts] TTS failed for segment ({exc}), using silence")
@@ -592,6 +665,24 @@ def text_file_to_speech(
 
         raw_spk = seg.get("speaker") if isinstance(seg, dict) else None
         speaker_wav = spk_to_wav.get(str(raw_spk)) if raw_spk and spk_to_wav else None
+
+        # Infer gender for EdgeTTS voice selection.
+        # pyannote labels: SPEAKER_00, SPEAKER_01, ...
+        # Some corpora use explicit gender suffixes (e.g. SPK_F0, SPK_M1).
+        # Fallback: even-indexed speakers → male, odd-indexed → female.
+        seg_gender: str | None = seg.get("gender")  # explicit if diarization set it
+        if not seg_gender and raw_spk:
+            spk_str = str(raw_spk).upper()
+            if any(tag in spk_str for tag in ("_F", "FEM", "WOMAN")):
+                seg_gender = "female"
+            elif any(tag in spk_str for tag in ("_M", "MALE", "MAN")):
+                seg_gender = "male"
+            else:
+                # Pyannote SPEAKER_00/01 — use speaker index parity
+                spk_order = _unique_speaker_order(segments)
+                idx = spk_order.index(str(raw_spk)) if str(raw_spk) in spk_order else 0
+                seg_gender = "male" if idx % 2 == 0 else "female"
+
         seg_metas.append({
             "index": i,
             "text": seg_text,
@@ -601,6 +692,7 @@ def text_file_to_speech(
             "stretch_factor": stretch_factor,
             "aligned_seg": aligned_seg,
             "speaker_wav": speaker_wav,
+            "gender": seg_gender,
         })
 
     # ── Phase 1: GPU synthesis (concurrent) ───────────────────────────
@@ -620,6 +712,7 @@ def text_file_to_speech(
                 meta["text"],
                 wav_path,
                 speaker_wav=meta.get("speaker_wav"),
+                gender=meta.get("gender"),
             )
 
         with ThreadPoolExecutor(max_workers=_TTS_WORKERS) as pool:
