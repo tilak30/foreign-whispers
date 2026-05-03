@@ -3,7 +3,7 @@
 [![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-Source_Available-blue.svg)](./LICENSE)
 
 > **NYU Spring 2026 — NLP Project**  
-> **Student:** Tilak Bhansali &nbsp;|&nbsp; **NetID:** `tb3057`
+> **Student:** Tilak Bhansali &nbsp;|&nbsp; **NetID:** `tb3525`
 
 YouTube video dubbing pipeline — transcribe, translate, and dub videos into Spanish with gender-aware neural voices.
 
@@ -79,8 +79,7 @@ docker compose --profile cpu up -d
 open http://localhost:8501
 ```
 
-TTS uses **Microsoft Edge TTS** (free, neural, gender-aware) by default — no API key needed.  
-For GPU-accelerated Chatterbox voice cloning, see [GPU Setup](#gpu-setup) below.
+TTS uses **Microsoft Edge TTS** (free, neural, gender-aware) by default — no GPU or API key needed.
 
 ### NVIDIA GPU
 
@@ -126,19 +125,20 @@ FW_TTS_ENGINE=coqui   # Offline Coqui
 
 ---
 
-## GPU Setup
+## GPU Setup (Optional)
 
-### Colab Backend (Chatterbox)
+By default the pipeline uses **Edge TTS** (Microsoft neural voices, free, no GPU). For higher-quality voice cloning via Chatterbox, point `CHATTERBOX_API_URL` in `.env` at any running Chatterbox-compatible server:
 
-1. Open `colab_backend.ipynb` on [Google Colab](https://colab.research.google.com)
-2. Set Runtime → **T4 GPU**
-3. Run the single cell — it prints a public URL
-4. Add to `.env`: `API_URL=https://xxxx.ngrok-free.app`
-5. Restart: `docker compose --profile cpu up -d`
+```bash
+# .env
+CHATTERBOX_API_URL=http://your-gpu-host:8020
+```
+
+The engine auto-detects Chatterbox at startup and falls back to Edge TTS if it is unreachable.
 
 ### Speaker Voice Files
 
-Place reference WAV clips in `pipeline_data/speakers/` for voice cloning:
+Place reference WAV clips in `pipeline_data/speakers/` for voice cloning with Chatterbox:
 
 ```
 pipeline_data/speakers/

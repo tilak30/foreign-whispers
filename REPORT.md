@@ -133,11 +133,11 @@ English is a stress-timed language with many reduced vowels. Spanish is syllable
 
 **Solution:** Multi-stage pipeline: predict duration before synthesis → select shorter translations → time-stretch within quality bounds → pad/trim to target window.
 
-### 4.2 Colab / GPU Backend Connectivity
+### 4.2 Integrating Async Edge TTS into a Synchronous Pipeline
 
-Setting up Chatterbox TTS on Colab proved fragile due to Python environment conflicts between Colab's system Python 3.12 and project dependencies, and ngrok port binding race conditions. 
+The `edge-tts` library is fully async (`async/await`), but the TTS synthesis pipeline uses synchronous `tts_to_file()` calls dispatched from a `ThreadPoolExecutor`. Calling `asyncio.run()` from inside a thread that may already have a running event loop raises `RuntimeError: This event loop is already running`.
 
-**Solution (before switching to Edge TTS as default):** Single-cell Colab notebook that performs all setup sequentially — starts uvicorn as a background subprocess, socket-probes it until ready, then opens the ngrok tunnel. Additionally relaxed `requires-python` from `>=3.11,<3.12` to `>=3.11` to resolve the install failure.
+**Solution:** `EdgeTTSClient.tts_to_file()` detects whether a loop is already running and, if so, dispatches the coroutine onto a fresh `ThreadPoolExecutor` thread where `asyncio.run()` is safe. Edge TTS also produces MP3 output, so we transcode to WAV via pydub before returning, keeping the rest of the pipeline format-agnostic.
 
 ### 4.3 Test Suite Migration
 
