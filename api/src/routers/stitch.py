@@ -4,6 +4,7 @@ import asyncio
 import functools
 import json
 import pathlib
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
@@ -17,14 +18,45 @@ router = APIRouter(prefix="/api")
 _stitch_service = StitchService(ui_dir=settings.data_dir)
 
 
-def _segments_to_vtt(segments: list[dict]) -> str:
+def _find_latest_align_json(title: str) -> Optional[pathlib.Path]:
+    """Find the most recently created .align.json file for a video title."""
+    tts_audio_dir = settings.tts_audio_dir
+    if not tts_audio_dir.exists():
+        return None
+    align_files = list(tts_audio_dir.glob(f"*/{title}.align.json"))
+    if not align_files:
+        return None
+    return max(align_files, key=lambda p: p.stat().st_mtime)
+
+
+def _segments_to_vtt(segments: list[dict], align_segments: Optional[list[dict]] = None) -> str:
     """Convert transcript segments to rolling two-line WebVTT format.
 
-    Mimics Google-style captions: each cue shows the current line on top
-    and the previous line on the bottom, creating a smooth reading bridge.
+    If align_segments provided: merges segments with alignment timing, sorts by
+    scheduled_start_s (chronological order in the actual audio), then generates VTT.
+    
+    Otherwise: uses original segment timing.
     """
-    # Filter to non-empty segments first
-    segs = [s for s in segments if s.get("text", "").strip()]
+    # If we have alignment data, merge and sort by actual audio timeline
+    if align_segments and len(align_segments) == len(segments):
+        # Build list with both translation text and alignment timing
+        merged = []
+        for i, seg in enumerate(segments):
+            if not seg.get("text", "").strip():
+                continue
+            align_seg = align_segments[i]
+            merged.append({
+                "start": align_seg["scheduled_start_s"],
+                "end": align_seg["scheduled_start_s"] + align_seg["target_sec"],
+                "text": seg["text"].strip(),
+            })
+        # Sort by chronological start time (this is the actual order in the dubbed audio)
+        merged.sort(key=lambda x: x["start"])
+        segs = merged
+    else:
+        # Fallback: use original segments in order
+        segs = [s for s in segments if s.get("text", "").strip()]
+    
     if not segs:
         return "WEBVTT\n"
 
@@ -110,7 +142,9 @@ def _compute_speech_offset(title: str) -> float:
 async def get_captions(video_id: str):
     """Serve translated (target-language) captions as WebVTT.
 
-    Applies the YouTube caption timing offset so subtitles start when speech begins.
+    Uses aligned timing from the most recent .align.json if available to ensure
+    subtitles are in chronological order matching the actual audio timeline.
+    Falls back to original segment order if align data is unavailable.
     """
     title = resolve_title(video_id)
     if title is None:
@@ -129,15 +163,28 @@ async def get_captions(video_id: str):
     data = json.loads(json_path.read_text())
     segments = data.get("segments", [])
 
-    # Apply timing offset from YouTube captions
-    offset = _compute_speech_offset(title)
-    if offset > 0:
-        segments = [
-            {**seg, "start": seg["start"] + offset, "end": seg["end"] + offset}
-            for seg in segments
-        ]
+    # Try to load aligned timing from the most recent .align.json
+    # This ensures subtitles follow the actual audio timeline order
+    align_segments = None
+    align_json_path = _find_latest_align_json(title)
+    if align_json_path:
+        try:
+            align_data = json.loads(align_json_path.read_text())
+            align_segments = align_data.get("segments", [])
+        except Exception:
+            pass  # Fall back to original order if align.json is malformed
 
-    vtt = _segments_to_vtt(segments)
+    # Apply YouTube caption timing offset if not using alignment
+    # (alignment data already incorporates proper timing)
+    if align_segments is None:
+        offset = _compute_speech_offset(title)
+        if offset > 0:
+            segments = [
+                {**seg, "start": seg["start"] + offset, "end": seg["end"] + offset}
+                for seg in segments
+            ]
+
+    vtt = _segments_to_vtt(segments, align_segments=align_segments)
     vtt_dir.mkdir(parents=True, exist_ok=True)
     vtt_path.write_text(vtt)
     return PlainTextResponse(vtt, media_type="text/vtt")
