@@ -50,7 +50,7 @@ def test_tts_returns_audio_path(client, monkeypatch, ui_dir):
         lambda video_id: "Test Title",
     )
 
-    def fake_tts(source_path, output_path, tts_engine=None, alignment=False):
+    def fake_tts(source_path, output_path, tts_engine=None, alignment=False, **kwargs):
         wav = pathlib.Path(output_path) / "Test Title.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 100)
 
@@ -111,7 +111,7 @@ def test_tts_runs_in_threadpool(client, monkeypatch, ui_dir):
 
     executor_used = {"yes": False}
 
-    def fake_tts(source_path, output_path, tts_engine=None, alignment=False):
+    def fake_tts(source_path, output_path, tts_engine=None, alignment=False, **kwargs):
         wav = pathlib.Path(output_path) / "Test Title.wav"
         wav.write_bytes(b"RIFF" + b"\x00" * 100)
 

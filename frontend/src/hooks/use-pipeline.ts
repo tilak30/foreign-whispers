@@ -208,7 +208,8 @@ export function usePipeline() {
       for (const cfg of configs) {
         dispatch({ type: "SELECT_VARIANT", variantId: makeVariantId(video.id, cfg.id) });
         const alignment = cfg.dubbing === "aligned";
-        await run("tts", () => synthesizeSpeech(dl.video_id, cfg.id, alignment));
+        const voiceCloning = cfg.voiceCloning === "cloned" ? "true" : undefined;
+        await run("tts", () => synthesizeSpeech(dl.video_id, cfg.id, alignment, voiceCloning));
         await run("stitch", () => stitchVideo(dl.video_id, cfg.id));
       }
 

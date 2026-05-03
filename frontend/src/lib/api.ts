@@ -59,10 +59,12 @@ export async function translateVideo(
 export async function synthesizeSpeech(
   videoId: string,
   config: string,
-  alignment: boolean = false
+  alignment: boolean = false,
+  voiceCloning?: string
 ): Promise<TTSResponse> {
+  const vcParam = voiceCloning ? `&voice_cloning=${voiceCloning}` : "";
   return fetchJson<TTSResponse>(
-    `/api/tts/${videoId}?config=${config}&alignment=${alignment}`,
+    `/api/tts/${videoId}?config=${config}&alignment=${alignment}${vcParam}`,
     { method: "POST" }
   );
 }

@@ -31,37 +31,41 @@ class TestSyncedSegmentAudio:
 
     def test_output_duration_matches_target(self, tmp_path):
         """Stretched audio must be within 50 ms of the requested target duration."""
-        from api.src.services.tts_engine import _synced_segment_audio, tts
+        from api.src.services.tts_engine import _synced_segment_audio, _get_tts_engine
 
         target_sec = 3.0
-        result = _synced_segment_audio(tts, "Hola mundo", target_sec, tmp_path)
+        engine = _get_tts_engine()
+        result, _, _ = _synced_segment_audio(engine, "Hola mundo", target_sec, tmp_path)
 
         assert isinstance(result, AudioSegment)
         assert abs(len(result) - target_sec * 1000) < 50  # within 50 ms
 
     def test_empty_text_returns_silence(self, tmp_path):
         """Empty or whitespace text must return silent audio of target duration."""
-        from api.src.services.tts_engine import _synced_segment_audio, tts
+        from api.src.services.tts_engine import _synced_segment_audio, _get_tts_engine
 
         target_sec = 2.0
-        result = _synced_segment_audio(tts, "   ", target_sec, tmp_path)
+        engine = _get_tts_engine()
+        result, _, _ = _synced_segment_audio(engine, "   ", target_sec, tmp_path)
 
         assert isinstance(result, AudioSegment)
         assert abs(len(result) - target_sec * 1000) < 50
 
     def test_zero_duration_returns_none(self, tmp_path):
         """Zero-duration target (malformed segment) must return None."""
-        from api.src.services.tts_engine import _synced_segment_audio, tts
+        from api.src.services.tts_engine import _synced_segment_audio, _get_tts_engine
 
-        result = _synced_segment_audio(tts, "Hola", 0.0, tmp_path)
+        engine = _get_tts_engine()
+        result, _, _ = _synced_segment_audio(engine, "Hola", 0.0, tmp_path)
         assert result is None
 
     def test_speedup_clamped(self, tmp_path, monkeypatch):
-        """Speedup factors outside [0.1, 10] must be clamped, not raise."""
-        from api.src.services.tts_engine import _synced_segment_audio, tts
+        """Speedup factors outside [SPEED_MIN, SPEED_MAX] must be clamped, not raise."""
+        from api.src.services.tts_engine import _synced_segment_audio, _get_tts_engine
 
-        # Force a very small target to push speedup > 10
-        result = _synced_segment_audio(tts, "Esta es una frase bastante larga.", 0.05, tmp_path)
+        engine = _get_tts_engine()
+        # Force a very small target to push speedup > SPEED_MAX
+        result, _, _ = _synced_segment_audio(engine, "Esta es una frase bastante larga.", 0.05, tmp_path)
         assert result is not None  # must not raise
 
 

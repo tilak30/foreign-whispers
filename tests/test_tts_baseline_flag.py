@@ -72,31 +72,27 @@ def test_sidecar_segments_contain_speed_factor(tmp_path):
 
 def test_fw_alignment_off_uses_unclamped_range(tmp_path, monkeypatch):
     """FW_ALIGNMENT=off bypasses the [0.85, 1.25] clamp (uses legacy [0.1, 10])."""
-    monkeypatch.setenv("FW_ALIGNMENT", "off")
-    import importlib, tts
-    importlib.reload(tts)  # re-evaluate module-level FW_ALIGNMENT read
-
+    from api.src.services.tts_engine import _synced_segment_audio
+    from unittest.mock import MagicMock
     import numpy as np
     import soundfile as sf
 
     sr = 22050
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Use a different filename from the one _synced_segment_audio writes internally
         source_wav = pathlib.Path(tmpdir) / "source_5s.wav"
-        # 5-second audio into 1-second target → speed = 5.0 → clamped to 1.25 normally
+        # 5-second audio into 1-second target → speed = 5.0 → legacy clamp allows it
         sf.write(str(source_wav), np.zeros(sr * 5, dtype=np.float32), sr)
 
         engine = MagicMock()
         def fake_tts(text, file_path, **kwargs):
-            import shutil; shutil.copy(source_wav, file_path)
+            import shutil
+            shutil.copy(source_wav, file_path)
         engine.tts_to_file.side_effect = fake_tts
 
-        result = tts._synced_segment_audio(engine, "test", target_sec=1.0, work_dir=tmpdir)
-        # With legacy clamp [0.1, 10]: speed=5.0 is allowed; result duration ≠ 1s target
-        # With new clamp [0.85, 1.25]: speed would be clamped to 1.25; result ≈ 4s → trimmed to 1s
-        # In legacy mode rubberband applies speed=5.0, result is 5/5=1s — so both modes trim.
-        # The meaningful assertion: no exception, result audio segment is not None.
-        audio, sf_val, rd = result
+        # Pass alignment_enabled=False to exercise the legacy [0.1, 10] clamp
+        audio, sf_val, rd = _synced_segment_audio(
+            engine, "test", target_sec=1.0, work_dir=tmpdir, alignment_enabled=False
+        )
         assert audio is not None
         # Legacy clamp [0.1, 10]: speed=5.0 for 5s audio / 1s target — unclamped
         assert sf_val == pytest.approx(5.0, abs=0.1)
