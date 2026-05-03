@@ -9,6 +9,18 @@ YouTube video dubbing pipeline — transcribe, translate, and dub videos into Sp
 
 ---
 
+## Deliverables
+
+This project fulfills the following requirements:
+
+1. **Codebase**: Complete source code in this repository (all files pushed to GitHub)
+2. **README**: This file explains how to run the application and project structure
+3. **Technical Report**: [REPORT.md](./REPORT.md) — 5-page architecture & technical details
+4. **Screen Recording**: _[Link to YouTube/GDrive recording showing live pipeline demo]_
+5. **Sample Output Video**: _[Link to YouTube/GDrive showing dubbed video with aligned subtitles]_
+
+---
+
 ## 🎬 Demo
 
 | | Link |
@@ -17,6 +29,12 @@ YouTube video dubbing pipeline — transcribe, translate, and dub videos into Sp
 | **Sample Output Video** | _TODO: Add YouTube/GDrive link_ |
 
 ---
+
+## Recent Fix: Subtitle Synchronization
+
+**Issue:** Dubbed audio was correctly aligned via the TTS engine, but subtitles were still using original Whisper timestamps, causing drift.
+
+**Solution:** Modified the captions endpoint (`/api/captions/{video_id}`) to detect and use the `.align.json` sidecar file produced by the TTS engine, which contains the correct aligned timing (`scheduled_start_s`) for each segment. If the align report is unavailable, the system falls back to original segment timing + YouTube offset.
 
 ## Architecture
 
