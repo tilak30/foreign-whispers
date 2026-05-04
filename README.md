@@ -1,14 +1,9 @@
-# Foreign Whispers
+# Foreign Whispers — AI Video Dubbing Pipeline
 
-[![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-Source_Available-blue.svg)](./LICENSE)
+> An open-source, end-to-end video dubbing system that takes a YouTube video, transcribes it, diarizes speakers, translates it, synthesizes gender-aware dubbed audio, and produces a final dubbed video — all without any paid API keys or GPU required.
 
-> **NYU Spring 2026 — NLP Project**  
->| **Student** | **NetID:** |
->|---|---|
->| Tilak Bhansali | tb3525 |
->| Advait Jishnani | aj4700 |
-
-YouTube video dubbing pipeline — transcribe, translate, and dub videos into Spanish with gender-aware neural voices.
+> **NYU Spring 2026 — NLP Project**
+> **Students:** Tilak Bhansali (`tb3525`) · Advait Jishnani (`aj4700`) 
 
 ---
 
@@ -16,174 +11,195 @@ YouTube video dubbing pipeline — transcribe, translate, and dub videos into Sp
 
 | | Link |
 |---|---|
-| **Screen Recording (Pipeline Demo)** | _TODO: Add YouTube/GDrive link_ |
-| **Sample Output Video** | _TODO: Add YouTube/GDrive link_ |
+| **Screen Recording (Pipeline Demo)** | https://youtu.be/IybYzYxw5Mc |
+| **Sample Output Video** | https://youtu.be/rJDAIvVWwW0 |
+
+---
+
+## What It Does
+
+```
+YouTube URL → Download → Transcribe → Diarize → Translate → TTS → Stitch → Dubbed Video
+```
+
+- **Download** — Fetches video and captions from YouTube using `yt-dlp`
+- **Transcribe** — Converts speech to text using OpenAI Whisper (`base`, CPU, runs inside API container)
+- **Diarize** — Detects speaker turns using `pyannote.audio`, injected into transcript JSON
+- **Translate** — Translates English transcript to Spanish using `argostranslate` with MarianMT neural reranking
+- **TTS** — Synthesizes gender-aware dubbed audio using Edge TTS (default, free, no GPU) with Chatterbox as an optional GPU upgrade
+- **Stitch** — Combines dubbed audio with original video using `ffmpeg` (direct stream copy, no re-encoding)
 
 ---
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph Input
-        YT[YouTube URL]
-    end
-
-    subgraph Pipeline
-        DL[Download<br/>yt-dlp]
-        TR[Transcribe<br/>Whisper / YT Captions]
-        DI[Diarize<br/>pyannote]
-        TL[Translate<br/>argostranslate]
-        TTS[Synthesize Speech<br/>Chatterbox GPU / Edge TTS]
-        ST[Render Dubbed Video<br/>ffmpeg remux]
-    end
-
-    subgraph Output
-        VID[Dubbed Video<br/>+ WebVTT captions]
-    end
-
-    subgraph Stack
-        FE[Next.js Frontend<br/>:8501]
-        API[FastAPI Backend<br/>:8080]
-    end
-
-    YT --> DL --> TR --> DI --> TL --> TTS --> ST --> VID
-
-    FE -- /api/* proxy --> API
-    API --> DL
-
-    classDef default fill:#37474f,color:#fff,stroke:#546e7a
-    classDef pipeline fill:#0277bd,color:#fff,stroke:#01579b
-    classDef stack fill:#00695c,color:#fff,stroke:#004d40
-    classDef io fill:#4527a0,color:#fff,stroke:#311b92
-
-    class YT,VID io
-    class DL,TR,DI,TL,TTS,ST pipeline
-    class FE,API stack
 ```
+┌──────────────────────────┐
+│   Frontend (Next.js)      │  :8501 — Dubbing Studio UI
+└────────────┬─────────────┘
+             │ HTTP (/api/* proxy)
+┌────────────▼─────────────┐
+│   API (FastAPI, CPU)      │  :8080 — Orchestrates pipeline
+│   · Whisper base (CPU)    │         Speech-to-text (in-process)
+│   · Edge TTS              │         Gender-aware neural TTS (default)
+│   · pyannote diarization  │         Speaker turn detection
+└──────────────────────────┘
+```
+
+| Layer | Tool | Port |
+|-------|------|------|
+| Frontend | Next.js + shadcn/ui Dubbing Studio | 8501 |
+| API | FastAPI orchestrator (CPU) | 8080 |
+| STT | Whisper base (runs inside API container, CPU) | — |
+| TTS | Edge TTS (default, CPU); Chatterbox GPU (optional, nvidia profile) | 8020 |
 
 ---
 
-## Quick Start
+## Requirements
 
-### Mac (Apple Silicon / Intel) — CPU Profile
+- **Docker Desktop** (latest version)
+- **Python 3.11+**
+- **uv** package manager
+- **Git**
+- 8GB+ RAM recommended
+- Internet access (for Edge TTS and yt-dlp)
+- No GPU required — the pipeline runs fully on CPU by default
+
+---
+
+## Installation
+
+### Step 1 — Clone the repository
 
 ```bash
 git clone https://github.com/tilak30/foreign-whispers.git
 cd foreign-whispers
-
-# Copy env template (no changes needed for basic use)
-cp .env.example .env
-
-# Required by yt-dlp
-touch cookies.txt
-
-# Start all services (no GPU required)
-docker compose --profile cpu up -d
-
-# Open the UI
-open http://localhost:8501
 ```
 
-TTS uses **Microsoft Edge TTS** (free, neural, gender-aware) by default — no GPU or API key needed.
+### Step 2 — Set up environment variables
 
-### NVIDIA GPU
+```bash
+cp .env.example .env
+```
+
+Open `.env` and fill in `HF_TOKEN` (HuggingFace token required for pyannote diarization).
+
+### Step 3 — Install Python dependencies
+
+```bash
+uv sync
+```
+
+---
+
+## Running the App
+
+### CPU (default — no GPU required)
+
+```bash
+docker compose --profile cpu up -d
+```
+
+Starts two containers: the FastAPI API (with Whisper base + Edge TTS running in-process) and the Next.js frontend.
+
+### NVIDIA GPU (optional upgrade)
 
 ```bash
 docker compose --profile nvidia up -d
 ```
 
-### Apple Silicon GPU (experimental)
+Adds two GPU containers: Whisper STT (Speaches, port 8000) and Chatterbox TTS (port 8020) for higher-quality voice cloning.
+
+### Verify everything is running
 
 ```bash
-docker compose --profile apple up -d
+docker compose ps
+curl http://localhost:8080/healthz
+# → {"status":"ok"}
 ```
 
-### Windows (WSL2)
+### Open the Dubbing Studio
 
-> **Important:** Never install Docker via `snap` on WSL — it runs under AppArmor confinement that blocks bind mounts. Use Docker CE from the official repo:
+Go to **http://localhost:8501** in your browser.
+
+---
+
+## TTS Engine
+
+The system automatically selects the best available TTS engine at startup:
+
+1. **Chatterbox GPU** — voice cloning, highest quality; requires a running GPU server at `CHATTERBOX_API_URL` (nvidia profile only)
+2. **Edge TTS** *(default on CPU)* — Microsoft neural voices, free, no GPU, gender-aware:
+   - Male speakers → `es-ES-AlvaroNeural`
+   - Female speakers → `es-ES-ElviraNeural`
+3. **Coqui Tacotron2** — fully offline fallback, no internet required
+
+Force a specific engine:
 
 ```bash
-sudo snap remove --purge docker
-sudo apt-get install -y ca-certificates curl
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-sudo apt-get update && sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-sudo usermod -aG docker "$USER" && sudo service docker start
+FW_TTS_ENGINE=edge    # Microsoft neural (default)
+FW_TTS_ENGINE=coqui   # Offline fallback
 ```
 
 ---
 
-## Pipeline Stages
+## Mac-Specific Notes
 
-| Stage | What it does | Output |
-|-------|-------------|--------|
-| **Download** | Fetch video + captions from YouTube via yt-dlp | `videos/`, `youtube_captions/` |
-| **Transcribe** | Deduplicates YouTube rolling captions into real sentence-level segments; falls back to Whisper STT | `transcriptions/whisper/` |
-| **Diarize** | Speaker turn detection via pyannote.audio; injects `speaker` labels into transcript | injected into transcript JSON |
-| **Translate** | EN→ES via argostranslate (offline OpenNMT) + neural reranking | `translations/argos/` |
-| **Synthesize Speech** | Gender-aware neural TTS, time-aligned to original segments | `tts_audio/chatterbox/` |
-| **Render Dubbed Video** | Replace audio track + regenerate aligned WebVTT captions | `dubbed_videos/` |
+This project was developed and tested on **Apple M4 (16GB RAM)** running macOS.
 
-### TTS Engine Priority
+Docker's `network_mode: host` does not work on macOS. The repo's `docker-compose.yml` already uses explicit port mappings (`8080:8080`, `8501:8501`) and sets the Next.js API URL to the Docker service name (`http://api:8080`) — so no manual changes are needed on Mac.
 
-1. **Chatterbox GPU** — best quality, voice cloning, requires GPU server
-2. **Edge TTS** _(default)_ — Microsoft neural voices, free, gender-aware:
-   - Male: `es-ES-AlvaroNeural`
-   - Female: `es-ES-ElviraNeural`
-3. **Coqui Tacotron2** — offline fallback, no internet required
+---
+
+## Running the Pipeline
+
+### Via the UI (recommended)
+
+1. Open **http://localhost:8501**
+2. Select a video from the left sidebar
+3. Click **Start Pipeline**
+4. Watch each stage complete: Download → Transcribe → Diarize → Translate → Synthesize → Stitch
+5. Click the **Baseline** tab to watch the dubbed video
+
+### Via curl (command line)
 
 ```bash
-FW_TTS_ENGINE=edge    # force Edge TTS
-FW_TTS_ENGINE=coqui   # force offline Coqui
+# P1 — Download
+curl -X POST http://localhost:8080/api/download \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.youtube.com/watch?v=GYQ5yGV_-Oc"}'
+
+# P2 — Transcribe
+curl -X POST http://localhost:8080/api/transcribe/GYQ5yGV_-Oc
+
+# P3 — Translate
+curl -X POST http://localhost:8080/api/translate/GYQ5yGV_-Oc
+
+# P4 — TTS (with alignment)
+curl -X POST "http://localhost:8080/api/tts/GYQ5yGV_-Oc?alignment=true"
+
+# P5 — Stitch
+curl -X POST http://localhost:8080/api/stitch/GYQ5yGV_-Oc
+```
+
+### Output location
+
+```
+pipeline_data/api/dubbed_videos/{video_title}.mp4
 ```
 
 ---
 
-## Rerunning After Code Changes
+## Pipeline Stage Latencies (CPU, ~10 min video)
 
-Intermediate results are cached to disk. After code changes, clear the relevant caches:
-
-```bash
-TITLE="Your Video Title Here"
-rm -f "pipeline_data/api/transcriptions/whisper/${TITLE}.json"
-rm -f "pipeline_data/api/translations/argos/${TITLE}.json"
-rm -rf pipeline_data/api/tts_audio/*/
-rm -rf pipeline_data/api/dubbed_videos/*/
-rm -f "pipeline_data/api/dubbed_captions/${TITLE}.vtt"
-
-# Restart API container to reload updated Python code
-docker compose --profile cpu restart api
-```
-
-Then re-run from the **Transcribe** step in the UI.
-
----
-
-## GPU Setup (Optional)
-
-For voice cloning via Chatterbox, set `CHATTERBOX_API_URL` in `.env`:
-
-```bash
-CHATTERBOX_API_URL=http://your-gpu-host:8020
-```
-
-### Speaker Voice Files
-
-Place reference WAV clips in `pipeline_data/speakers/` for Chatterbox voice cloning:
-
-```
-pipeline_data/speakers/
-├── default.wav
-└── es/
-    └── default.wav
-```
-
-Compatible corpora: AMI Corpus, VoxConverse, LibriSpeech, or WAVs extracted directly from source videos.
+| Stage | Latency |
+|-------|---------|
+| Download | ~15s |
+| Transcribe (Whisper base, CPU) | ~90s |
+| Translate + Rerank | ~45s |
+| TTS Synthesis (Edge TTS, 3 workers) | ~120s |
+| Stitch | ~5s |
+| **Total** | **~275s (~4.5 min)** |
 
 ---
 
@@ -194,66 +210,91 @@ foreign-whispers/
 ├── api/src/
 │   ├── main.py                  # App factory + lazy model loading
 │   ├── core/config.py           # Pydantic settings (FW_ env prefix)
-│   ├── routers/
-│   │   ├── transcribe.py        # POST /api/transcribe  ← rolling-caption dedup fix
-│   │   ├── diarize.py           # POST /api/diarize
-│   │   ├── translate.py         # POST /api/translate
-│   │   ├── tts.py               # POST /api/tts  ← always gender-aware
-│   │   └── stitch.py            # POST /api/stitch, GET /api/captions  ← aligned VTT
-│   └── services/
-│       ├── tts_engine.py        # Chatterbox / EdgeTTS / Coqui + gender inference
-│       └── stitch_engine.py     # ffmpeg remux
+│   ├── routers/                 # Thin route handlers (download, transcribe, etc.)
+│   ├── services/
+│   │   ├── tts_engine.py        # Edge TTS / Coqui / Chatterbox fallback chain
+│   │   └── tts_service.py       # Service wrapper
+│   └── schemas/                 # Pydantic request/response models
 ├── foreign_whispers/
-│   ├── reranking.py             # Duration-aware translation candidate selection
-│   ├── alignment.py             # Ridge regression + DP global alignment
-│   ├── diarization.py           # pyannote speaker diarization
-│   └── vad.py                   # Silence region detection
+│   ├── reranking.py             # MarianMT neural translation reranking
+│   ├── alignment.py             # Ridge regression duration prediction + DP alignment
+│   └── diarization.py          # pyannote speaker diarization
 ├── frontend/                    # Next.js + shadcn/ui Dubbing Studio
-├── pipeline_data/               # All intermediate + output files (volume-mounted)
-├── docker-compose.yml
-├── Dockerfile
-└── REPORT.md
+├── notebooks/                   # Jupyter notebooks for each pipeline stage
+├── pipeline_data/               # Generated artifacts (videos, audio, etc.)
+├── tests/                       # Test suite (23/23 targeted tests passing)
+├── docker-compose.yml           # Profiles: cpu, nvidia
+├── Dockerfile                   # Multi-stage: cpu and gpu targets
+└── pyproject.toml               # Python dependencies
 ```
+
+---
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/download` | Download YouTube video + captions |
-| POST | `/api/transcribe/{id}` | Transcribe (YouTube caption dedup or Whisper STT) |
-| POST | `/api/diarize/{id}` | Speaker turn detection |
+| POST | `/api/transcribe/{id}` | Whisper speech-to-text |
 | POST | `/api/translate/{id}` | EN→ES translation + reranking |
-| POST | `/api/tts/{id}` | Time-aligned gender-aware TTS synthesis |
-| POST | `/api/stitch/{id}` | Audio remux into dubbed MP4 |
+| POST | `/api/tts/{id}` | Time-aligned TTS synthesis |
+| POST | `/api/stitch/{id}` | Audio remux (ffmpeg -c:v copy) |
 | GET | `/api/video/{id}` | Stream dubbed video |
-| GET | `/api/captions/{id}` | Aligned WebVTT captions |
-| GET | `/api/captions/{id}/original` | Original English captions |
+| GET | `/api/captions/{id}` | Translated WebVTT captions |
 | GET | `/healthz` | Health check |
 
-## Development
-
-```bash
-# Restart API after code changes
-docker compose --profile cpu restart api
-
-# Run tests
-uv run pytest tests/ -q -k "not requires_pyannote and not requires_silero"
-```
+---
 
 ## Environment Variables
 
 | Variable | Default | Description |
-|---|---|---|
-| `FW_TTS_ENGINE` | _(auto)_ | Force `edge`, `coqui`, or `chatterbox` |
-| `FW_EDGE_VOICE_MALE` | `es-ES-AlvaroNeural` | Edge TTS male Spanish voice |
-| `FW_EDGE_VOICE_FEMALE` | `es-ES-ElviraNeural` | Edge TTS female Spanish voice |
-| `FW_ALIGNMENT` | `on` | Set `off` to disable DP alignment |
+|----------|---------|-------------|
+| `FW_TTS_ENGINE` | *(auto)* | Force `edge`, `coqui`, or `chatterbox` |
+| `FW_EDGE_VOICE_MALE` | `es-ES-AlvaroNeural` | Edge TTS male voice |
+| `FW_EDGE_VOICE_FEMALE` | `es-ES-ElviraNeural` | Edge TTS female voice |
+| `FW_ALIGNMENT` | `on` | Set `off` to disable ridge-regression alignment |
 | `FW_TTS_WORKERS` | `3` | Concurrent TTS synthesis threads |
-| `CHATTERBOX_API_URL` | `http://localhost:8020` | Chatterbox GPU server URL |
-| `HF_TOKEN` | _(none)_ | HuggingFace token (required for pyannote diarization) |
+| `FW_WHISPER_MODEL` | `base` | Whisper model size (base runs on CPU) |
+| `CHATTERBOX_API_URL` | `http://chatterbox-gpu:8020` | Chatterbox server (nvidia profile only) |
+| `HF_TOKEN` | — | HuggingFace token for pyannote diarization |
 
-## Requirements
+---
 
-- Docker + Docker Compose
-- Python 3.11+ (for local library use without Docker)
-- NVIDIA GPU, Apple M-series, or Google Colab T4 recommended for Chatterbox
+## Development
+
+### Editing without rebuilding
+
+`foreign_whispers/` and `api/` are bind-mounted into the container. Edit on host, then:
+
+```bash
+docker compose --profile cpu restart api
+```
+
+### Running tests
+
+```bash
+uv run pytest tests/ -q -k "not requires_pyannote and not requires_silero"
+```
+
+---
+
+## Known Limitations
+
+- **Spanish only** — Translation target is hardcoded to Spanish. Other language pairs require additional argostranslate models and TTS voice configuration.
+- **Alignment bounds** — Time-stretching is clamped to [0.75×, 1.25×] to preserve naturalness. Segments outside this range are padded with silence.
+- **Diarization requires HF token** — pyannote.audio requires a HuggingFace token and model access agreement on the pyannote/speaker-diarization model page.
+- **Edge TTS requires internet** — The default TTS engine makes outbound requests to Microsoft's neural voice API. Use `FW_TTS_ENGINE=coqui` for a fully offline setup.
+- **YouTube rate limits** — Heavy usage may trigger rate limiting. Add valid YouTube cookies to `cookies.txt` to mitigate.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| Frontend shows blank page | Verify `API_URL` build arg matches service name in `docker-compose.yml` |
+| Diarization fails with 401 | Set `HF_TOKEN` in `.env` and accept pyannote model agreements on HuggingFace |
+| Edge TTS produces no audio | Check outbound internet access from the API container |
+| `cookies.txt is a directory` error | Run `rm -rf cookies.txt && echo '# Netscape HTTP Cookie File' > cookies.txt` |
+| Download fails with Internal Server Error | Check `cookies.txt` exists and has the Netscape header |
+| Whisper transcription is slow | Expected on CPU with `base` model (~90s for a 10-min video); this is normal |
