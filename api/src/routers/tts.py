@@ -59,7 +59,12 @@ async def tts_endpoint(
 
     await _run_in_threadpool(
         None, svc.text_file_to_speech, source_path, str(audio_dir),
-        alignment=alignment, per_speaker_voices=bool(voice_cloning),
+        alignment=alignment,
+        # Always enable per-speaker gender-aware voices.
+        # Edge TTS picks es-ES-AlvaroNeural / es-ES-ElviraNeural based on the
+        # speaker gender inferred from pyannote labels in the transcript JSON.
+        # voice_cloning param still controls Chatterbox WAV upload behaviour.
+        per_speaker_voices=True,
     )
 
     return {

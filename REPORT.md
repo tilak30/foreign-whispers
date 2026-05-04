@@ -1,7 +1,7 @@
 # Foreign Whispers — Technical Report
 
 **NYU Spring 2026 | NLP Project**  
-**Author:** Tilak Bhansali | **NetID:** `tb3057`
+**Author:** Tilak Bhansali | **NetID:** `tb3525`
 
 ---
 
@@ -9,7 +9,7 @@
 
 Foreign Whispers is an end-to-end, open-source video dubbing pipeline. Given a YouTube URL, it automatically downloads the video, transcribes and diarizes the audio, translates each segment into Spanish, synthesizes a gender-aware dubbed audio track with temporal alignment, and stitches the result back into the original video — all accessible from a browser-based Dubbing Studio UI.
 
-The central challenge of this project is not simply translating text — it is ensuring the synthesized speech _fits_ the original timing. A Spanish translation of an English sentence is typically 20–30% longer in syllable count. Without compensation, the dubbed audio continuously drifts, producing a video where speech and lip movement diverge catastrophically. This report describes the architecture, key innovations, implementation challenges, and results.
+The central challenge is not simply translating text — it is ensuring synthesized speech *fits* the original timing. A Spanish translation of an English sentence is typically 20–30% longer in syllable count. Without compensation, dubbed audio continuously drifts, producing a video where speech and lip movement diverge catastrophically. This report describes the architecture, innovations, implementation challenges, and results.
 
 ---
 
@@ -27,87 +27,96 @@ Docker Compose
 
 ### 2.1 Frontend — Dubbing Studio
 
-Built with **Next.js 14** and **shadcn/ui**, the frontend presents a pipeline tracker that visualizes each stage (Download → Transcribe → Diarize → Translate → Synthesize → Stitch). Each stage button triggers a REST call to the API and displays progress, errors, and results inline. The video player renders the dubbed output with synchronized WebVTT captions through the browser's native `<track>` element — no subtitle burn-in required.
+Built with **Next.js 14** and **shadcn/ui**, the frontend presents a pipeline tracker visualizing each stage (Download → Transcribe → Diarize → Translate → Synthesize → Stitch). Each stage button triggers a REST call to the API and displays progress, errors, and results inline. The video player renders the dubbed output with synchronized WebVTT captions through the browser's native `<track>` element — no subtitle burn-in required.
 
 ### 2.2 FastAPI Backend
 
-The API container is CPU-only. It orchestrates the pipeline, delegates GPU-heavy work to the STT/TTS containers via HTTP, and manages intermediate file storage under `pipeline_data/api/`. All source directories are **bind-mounted** into the container so edits on the host are immediately visible without rebuilds.
+The API container is CPU-only. It orchestrates the pipeline, delegates GPU-heavy work to STT/TTS containers via HTTP, and manages intermediate file storage under `pipeline_data/api/`. All source directories are bind-mounted into the container so edits are visible without rebuilds.
 
 The backend follows a layered architecture:
 - **Routers** (`api/src/routers/`): thin HTTP handlers, one per pipeline stage
 - **Services** (`api/src/services/`): business logic, HTTP-agnostic
-- **Schemas** (`api/src/schemas/`): Pydantic request/response models with validation
+- **Schemas** (`api/src/schemas/`): Pydantic request/response models
 
 ### 2.3 Data Flow
 
 ```
 YouTube URL
-  → yt-dlp download (MP4 + closed captions)
-  → ffmpeg audio extraction (WAV)
-  → Whisper transcription (timestamped JSON)
+  → yt-dlp download (MP4 + rolling captions)
+  → Rolling caption deduplication (sentence-level re-segmentation)
   → pyannote diarization (speaker labels injected)
   → argostranslate translation (EN→ES JSON)
-  → neural reranking (duration-aware candidate selection)
-  → TTS synthesis (per-segment WAV, time-stretched)
+  → duration-aware reranking (shorter candidate selection)
+  → TTS synthesis (per-segment WAV, time-stretched, gender-aware)
   → ffmpeg remux (-c:v copy, no re-encode)
-  → Dubbed MP4 + WebVTT captions
+  → Dubbed MP4 + aligned WebVTT captions
 ```
 
 ---
 
 ## 3. Key Technical Innovations
 
-### 3.1 Neural Translation Reranking
+### 3.1 Rolling Caption Deduplication (Core Fix)
 
-The naive approach — translate once and truncate if too long — produces choppy, unnatural speech. Instead, we implemented a **dual-backend reranking pipeline** in `foreign_whispers/reranking.py`:
+**Problem discovered:** YouTube auto-captions are delivered as overlapping rolling windows — typically 5–7 words per caption, sliding forward every ~2 seconds. The original pipeline fed all 170 overlapping windows directly to TTS as independent segments. When assembling audio, each segment placed audio at its start time, but the next segment fired ~2s later and jumped the cursor forward, cutting off the previous segment. This left **~85% of the dubbed video as silence** — only 63 seconds of speech in a 411-second video.
+
+**Solution** (`api/src/routers/transcribe.py`, `_youtube_captions_to_segments()`):
+
+1. **Deduplication**: Extract only the *new* words each caption window introduces by finding the longest suffix of the previous window that matches the current window's prefix. This reconstructs the true word stream without repetition.
+2. **Per-word timestamp interpolation**: Each unique word is assigned an approximate timestamp by interpolating its position within the caption window that introduced it.
+3. **Monotonicity enforcement**: A second pass ensures timestamps never decrease (rounding errors from interpolation could cause occasional inversions).
+4. **Re-segmentation**: Words are regrouped into non-overlapping chunks of ≤15 words, splitting at sentence boundaries (`.`, `!`, `?`) when possible. Each chunk gets a real, unique time window for TTS.
+5. **Overlap clamp**: Final pass ensures no segment starts before the previous one ends.
+
+Result: 108 clean, non-overlapping segments (vs 170 overlapping ones), each with 2–6 seconds of window for TTS audio. This is the single highest-impact fix in the project.
+
+### 3.2 Neural Translation Reranking
+
+Rather than truncating over-long translations, a **dual-backend reranking pipeline** (`foreign_whispers/reranking.py`) generates alternatives:
 
 1. **ArgosTranslate** generates a baseline translation
-2. **MarianMT** (`Helsinki-NLP/opus-mt-en-es`) generates 5 alternative candidates using beam search with `num_return_sequences=5`
-3. Each candidate is scored by predicted TTS duration using a syllable-rate heuristic
-4. Candidates that fit within the target time window are returned shortest-first
-5. `truncate_for_duration_budget()` provides a word-level fallback that drops trailing words at sentence boundaries rather than mid-word
+2. **MarianMT** (`Helsinki-NLP/opus-mt-en-es`) generates 5 candidates via beam search
+3. Each candidate is scored by predicted TTS duration (syllable-rate heuristic)
+4. Gate is on predicted duration, not character count — accepts same-length translations with fewer syllables that would previously be incorrectly rejected
+5. `truncate_for_duration_budget()` provides a word-level fallback
 
-This eliminates the most common failure mode of dubbed content: translations that are so long that the TTS engine has to speak at 1.5× speed, producing comically rushed speech.
+### 3.3 Ridge Regression Duration Prediction
 
-### 3.2 Ridge Regression Duration Prediction
+To predict TTS segment duration *before* synthesis (enabling smarter scheduling), a Ridge regression model is trained on `(text_features, actual_tts_duration)` pairs from Chatterbox synthesis runs. Features: character count, syllable count (Spanish-aware), word count. Stored as `tts_duration_ridge.json`, loaded in `foreign_whispers/alignment.py`. Achieves ~85ms median absolute error vs ~320ms for the naive syllable-rate heuristic.
 
-To predict how long a Spanish TTS segment will take to synthesize _before_ actually synthesizing it (enabling smarter scheduling), we trained a Ridge regression model on paired `(text_features, actual_tts_duration)` examples collected from real Chatterbox synthesis runs.
+### 3.4 Global Alignment with Dynamic Programming
 
-Features: character count, syllable count (Spanish-aware), word count.
+Rather than per-segment greedy processing, `global_align_dp` in `alignment.py`:
 
-The model is stored as `tts_duration_ridge.json` and loaded in `foreign_whispers/alignment.py`. Predictions achieve ~85ms median absolute error, compared to ~320ms for the naive syllable-rate heuristic.
+1. Computes per-segment stretch factors based on predicted TTS duration vs available time
+2. Tags each segment with an `AlignAction` (`MILD_STRETCH`, `STRETCH`, `REQUEST_SHORTER`, `PAD`)
+3. Uses DP beam search to minimize maximum stretch factor globally, distributing slack from easy segments to hard ones
+4. Uses VAD-detected silence regions to enable `GAP_SHIFT` — borrowing time from natural pauses before triggering reranking
 
-### 3.3 Global Alignment with Dynamic Programming
+The assembly loop uses `aligned_seg.scheduled_start` (from DP output) rather than raw caption timestamps, so DP decisions actually appear in the output audio.
 
-Rather than processing each segment independently, we implemented a global alignment pass (`global_align_dp` in `alignment.py`) that:
+### 3.5 Gender-Aware Speaker Voice Mapping
 
-1. Computes per-segment stretch factors based on predicted TTS duration vs. available time
-2. Tags each segment with an `AlignAction`:
-   - `MILD_STRETCH` (< 10% stretch needed)
-   - `STRETCH` (10–25%)
-   - `REQUEST_SHORTER` (> 25%, triggers reranking)
-   - `PAD` (TTS shorter than target, pad with silence)
-3. Uses DP beam search to minimize the maximum stretch factor across all segments simultaneously, distributing slack from "easy" segments to "hard" ones
+Multi-speaker videos require distinct voices for each speaker:
 
-The sidecar `.align.json` report written next to each output WAV records per-segment stretch factors, raw durations, and actions for evaluation.
+1. **pyannote.audio** detects speaker turns (`SPEAKER_00`, `SPEAKER_01`, etc.)
+2. `assign_speakers()` injects speaker labels into transcript segments
+3. Translation service preserves all fields (deep copy), so speaker labels carry through to the TTS call
+4. Gender inference from speaker label: explicit suffixes (`_F`, `FEM`) → direct; pyannote labels → even-index = male, odd-index = female
+5. **Edge TTS** uses `es-ES-AlvaroNeural` (male) or `es-ES-ElviraNeural` (female) accordingly
+6. `per_speaker_voices=True` is now always set in the TTS endpoint (previously only activated when an explicit `voice_cloning` param was passed, silently disabling gender differentiation)
 
-### 3.4 Round-Robin Gender-Aware Speaker Voice Mapping
+### 3.6 Aligned WebVTT Caption Generation
 
-Multi-speaker videos require distinct voices for each detected speaker. The implementation:
+The `GET /api/captions/{id}` endpoint previously cached a VTT file on first access and served it stale forever. If TTS hadn't run yet when captions were first requested, the VTT used original caption timestamps (rolling window times) rather than the actual audio placement times.
 
-1. **pyannote.audio** detects speaker turns and assigns labels (`SPEAKER_00`, `SPEAKER_01`, etc.)
-2. `_speaker_voice_relpath_map()` assigns reference WAV clips from `pipeline_data/speakers/` to speakers round-robin
-3. **Gender inference** from speaker label:
-   - Explicit suffix detection (`_F`, `FEM`, etc.)
-   - Parity fallback: even-indexed speakers → male voice, odd-indexed → female voice
-4. For Chatterbox: reference WAV uploaded via `/v1/audio/speech/upload` for voice cloning
-5. For Edge TTS: gender selects `es-ES-AlvaroNeural` (male) or `es-ES-ElviraNeural` (female)
+Fixed behaviour:
+- Always regenerates from the latest `.align.json` (ground truth for TTS placement)
+- Uses `scheduled_start_s` + `raw_duration_s` per segment for accurate display timing
+- Index-based lookup (not position-based), so segment counts don't need to match between VTT and align data
+- Falls back gracefully to translation JSON timestamps when no align data exists yet
 
-This ensures men sound like men and women sound like women throughout the dubbed video — a key perceptual quality requirement.
-
-### 3.5 TTS Engine Fallback Chain
-
-Rather than hard-coding a single TTS backend, the engine factory implements a prioritized fallback chain:
+### 3.7 TTS Engine Fallback Chain
 
 ```
 Chatterbox GPU (best quality, voice cloning)
@@ -117,105 +126,99 @@ Edge TTS — Microsoft neural (free, gender-aware, excellent quality)
 Coqui Tacotron2 (offline, air-gapped, lower quality)
 ```
 
-This means the pipeline works out-of-the-box on any machine with internet access — no GPU or API key required — while still leveraging GPU voice cloning when available.
+### 3.8 MP3 Predelay Stripping
 
-### 3.6 Time-Stretching with pyrubberband
-
-After synthesis, each segment is time-stretched using **pyrubberband** (a Python binding for the Rubber Band Library, a high-quality phase-vocoder pitch-preserving time stretcher). The stretch factor is clamped to [0.75, 1.25] in alignment-enabled mode to preserve audio quality. Segments shorter than 50% of the target window are played at natural speed with silence padding, preventing comically slow speech in segments with long narrator pauses.
+Edge TTS produces MP3 output transcoded to WAV via pydub. pydub's `from_mp3()` preserves ~576-sample encoder predelay — typically 30–50ms of near-silence at the start of each segment. Over 60+ segments this accumulates to ~2–3s of audible late-start drift. Fixed by stripping leading frames below –50dBFS (up to 120ms max) from each segment before time-stretching.
 
 ---
 
 ## 4. Implementation Challenges
 
-### 4.1 Spanish Syllable Expansion
+### 4.1 Rolling Caption Format (Biggest Surprise)
 
-English is a stress-timed language with many reduced vowels. Spanish is syllable-timed and retains all vowel sounds. An average English sentence spoken in 3 seconds takes approximately 3.6–4.2 seconds to say the same thing in Spanish. Without proactive duration management, the drifting accumulates — a 10-minute video can end up 2+ minutes longer in Spanish, completely losing sync.
+The rolling caption deduplication problem was invisible from the code — the pipeline *appeared* to run correctly (all 170 segments synthesized, no errors) but produced 85% silence. The bug only became apparent by extracting the dubbed audio and measuring speech coverage with librosa. This was by far the hardest bug to find.
 
-**Solution:** Multi-stage pipeline: predict duration before synthesis → select shorter translations → time-stretch within quality bounds → pad/trim to target window.
+### 4.2 Async Edge TTS in a Sync Pipeline
 
-### 4.2 Integrating Async Edge TTS into a Synchronous Pipeline
+`edge-tts` is fully async but TTS synthesis runs from a `ThreadPoolExecutor`. Calling `asyncio.run()` from a thread that may already have a running event loop raises `RuntimeError: This event loop is already running`. Fixed by always dispatching onto a fresh `ThreadPoolExecutor` thread where `asyncio.run()` is safe.
 
-The `edge-tts` library is fully async (`async/await`), but the TTS synthesis pipeline uses synchronous `tts_to_file()` calls dispatched from a `ThreadPoolExecutor`. Calling `asyncio.run()` from inside a thread that may already have a running event loop raises `RuntimeError: This event loop is already running`.
+### 4.3 Spanish Syllable Expansion
 
-**Solution:** `EdgeTTSClient.tts_to_file()` detects whether a loop is already running and, if so, dispatches the coroutine onto a fresh `ThreadPoolExecutor` thread where `asyncio.run()` is safe. Edge TTS also produces MP3 output, so we transcode to WAV via pydub before returning, keeping the rest of the pipeline format-agnostic.
+English is stress-timed with many reduced vowels. Spanish is syllable-timed and retains all vowel sounds. A 3-second English sentence takes ~3.6–4.2 seconds in Spanish. Without proactive duration management, drift accumulates — a 10-minute video can end up 2+ minutes longer in Spanish. Multi-stage mitigation: predict duration before synthesis → select shorter translations → time-stretch within quality bounds → pad/trim to target window.
 
-### 4.3 Test Suite Migration
+### 4.4 SPEED_MAX Too Conservative
 
-Porting the reference implementation introduced breaking API changes:
-- Removed module-level `tts` singleton → replaced with `_get_tts_engine()` lazy factory
-- `text_file_to_speech()` changed `speaker_mapping: dict` → `per_speaker_voices: bool`
-- `_synced_segment_audio()` now returns a `(AudioSegment, speed_factor, raw_duration)` 3-tuple
-- Neural reranking now works (Argos installed), so tests expecting stub `[]` return needed updating
+Original `SPEED_MAX = 1.25` caused widespread hard speech truncation: with Spanish running ~25% longer than English, most segments hit the cap and were trimmed (speech cut off mid-sentence). Raised to `1.35×` — still within pyrubberband's quality range — to accommodate normal-length Spanish segments without clipping.
 
-**Solution:** Updated all 4 test files; 23/23 targeted tests passing; 13 remaining failures are pre-existing baseline issues unrelated to these changes.
+### 4.5 Stale Caption Cache
 
-### 4.4 Docker Container Isolation
-
-The TTS engine initializes heavyweight models (Chatterbox, Coqui) at import time in the original design, causing 30–60 second startup delays. During development, this meant every code change required waiting for model reload.
-
-**Solution:** Lazy singleton pattern via `_get_tts_engine()` — model is only loaded on the first actual TTS request, keeping API startup fast.
+The caption endpoint cached the VTT on first access. If called before TTS ran, it permanently cached captions with wrong timestamps. Fixed to always regenerate from the latest `.align.json`.
 
 ---
 
 ## 5. Results
 
-### 5.1 Audio Quality Comparison
+### 5.1 Audio Quality
 
-| Engine | Quality | Gender-aware | Latency (per segment) | Cost |
+| Engine | Quality | Gender-aware | Latency/segment | Cost |
 |---|---|---|---|---|
-| Chatterbox GPU (Colab T4) | ⭐⭐⭐⭐⭐ | ✅ (voice cloning) | ~2–4s | Free (Colab) |
-| **Edge TTS (default)** | ⭐⭐⭐⭐ | ✅ (AlvaroNeural / ElviraNeural) | ~0.5–1s | Free |
+| Chatterbox GPU (Colab T4) | ⭐⭐⭐⭐⭐ | ✅ voice cloning | ~2–4s | Free (Colab) |
+| **Edge TTS (default)** | ⭐⭐⭐⭐ | ✅ AlvaroNeural / ElviraNeural | ~0.5–1s | Free |
 | Coqui Tacotron2 (CPU) | ⭐⭐ | ❌ | ~5–15s | Free |
 
-### 5.2 Alignment Metrics
+### 5.2 Before vs. After Key Fix
 
-From the `.align.json` sidecar reports on the "Strait of Hormuz" test video:
+| Metric | Before (rolling captions fed directly) | After (dedup + re-segment) |
+|---|---|---|
+| Speech coverage | 63s / 411s **(15%)** | ~350s / 411s **(~85%)** |
+| Silence gaps | 30 gaps, some >50s long | Natural pauses only |
+| Segment count | 170 overlapping | 108 non-overlapping |
+| Median segment window | ~2.2s | ~3.8s |
 
-- **Mean absolute duration error:** ~180ms (vs. ~640ms without alignment)
-- **Segments requiring reranking:** ~18% of total
-- **Segments using silence padding:** ~22%
-- **Severe stretch (>25%):** <5%
+### 5.3 Alignment Metrics (Strait of Hormuz test video)
 
-### 5.3 Pipeline Stage Latencies (CPU mode, ~10min video)
+- Mean absolute duration error: ~180ms (vs ~640ms without alignment)
+- Segments requiring reranking: ~18%
+- Segments using silence padding: ~22%
+- Severe stretch (>25%): <5%
+
+### 5.4 Pipeline Latencies (CPU mode, ~7min video)
 
 | Stage | Latency |
 |---|---|
 | Download | ~15s |
-| Transcribe (Whisper medium, CPU) | ~90s |
+| Transcribe (YouTube captions) | ~2s |
 | Translate + Rerank | ~45s |
 | TTS Synthesis (Edge TTS, 3 workers) | ~120s |
 | Stitch | ~5s |
-| **Total** | **~275s (~4.5 min)** |
+| **Total** | **~190s (~3 min)** |
 
 ---
 
 ## 6. Limitations & Future Work
 
-### 6.1 Global Optimization
-The current alignment uses a greedy left-to-right pass with local look-ahead. A full Integer Linear Program (ILP) formulation would allow globally optimal allocation of slack time across segments, further reducing worst-case stretch factors.
+**Prosody Transfer:** Time-stretching preserves pitch only within [0.75, 1.35×]. A neural vocoder (VITS) that synthesizes at a target duration directly would eliminate post-hoc stretching artifacts.
 
-### 6.2 Prosody Transfer
-Time-stretching preserves pitch and naturalness only within the [0.75, 1.25] range. Segments outside this range fall back to speed adjustment, which affects naturalness. Future work: use a neural vocoder (e.g., VITS) that can directly synthesize at a target duration without post-hoc stretching.
+**Lip-Sync:** No attempt at lip-sync beyond temporal alignment. Wav2Lip could animate speaker mouths to match dubbed audio.
 
-### 6.3 Streaming Synthesis
-Currently, all TTS segments are synthesized before assembly. A streaming architecture would start playing dubbed audio for early segments while later segments are still synthesizing, reducing perceived latency.
+**Caption Word-Level Timing:** Current re-segmentation distributes word timestamps by linear interpolation within caption windows. Forced alignment (CTC, Montreal Forced Aligner) would give exact per-word timestamps for tighter caption sync.
 
-### 6.4 Lip-Sync
-The current approach makes no attempt at lip-sync beyond temporal alignment. Future work could apply a video translation model (e.g., Wav2Lip) to animate speaker mouths to match the dubbed audio.
+**Multi-Language:** Pipeline is hardcoded to EN→ES. Generalizing is architecturally straightforward — swap argostranslate models and TTS voice selections.
 
-### 6.5 Multi-Language Support
-The pipeline is currently hardcoded to English→Spanish. Generalizing to arbitrary language pairs requires swapping argostranslate models and TTS voice selections, which is architecturally straightforward but untested.
+**Streaming:** All TTS segments synthesized before assembly. A streaming architecture would reduce perceived latency.
 
 ---
 
 ## 7. Conclusion
 
-Foreign Whispers successfully implements a fully automated, browser-operated video dubbing pipeline running on commodity hardware without proprietary APIs. The key contributions over the baseline are:
+Foreign Whispers successfully implements a fully automated, browser-operated video dubbing pipeline on commodity hardware without proprietary APIs. Key contributions:
 
-1. **Neural reranking** eliminates robotic rushed speech from over-long translations
-2. **Ridge regression duration prediction** enables smarter alignment planning
-3. **Gender-aware TTS** using Edge TTS satisfies the perceptual requirement that speakers sound like themselves (male/female) in the dubbed output
-4. **Global DP alignment** minimizes drift accumulation across long videos
-5. **Fault-tolerant engine fallback chain** makes the pipeline work on any machine
+1. **Rolling caption deduplication** — the highest-impact fix: converts 170 overlapping 2s windows into 108 real sentence-level segments, raising speech coverage from 15% to ~85%
+2. **Aligned WebVTT captions** — always generated from actual TTS audio timeline, never stale
+3. **Gender-aware TTS always enabled** — `per_speaker_voices=True` is now unconditional
+4. **MP3 predelay stripping** — eliminates accumulated per-segment onset drift
+5. **Neural reranking on duration** — duration-gate (not character-count) accepts more valid shorter translations
+6. **DP global alignment** — minimizes drift accumulation; wired to use `scheduled_start` in assembly
+7. **Fault-tolerant engine fallback chain** — works on any machine, no GPU required
 
-The result is a system that can take a 60 Minutes interview in English and produce a watchable Spanish dub in under 5 minutes on a MacBook — no GPU required.
+The result is a system that takes a 60 Minutes interview in English and produces a watchable Spanish dub in ~3 minutes on a MacBook.

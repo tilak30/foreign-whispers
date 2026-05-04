@@ -30,33 +30,41 @@ def _find_latest_align_json(title: str) -> Optional[pathlib.Path]:
 
 
 def _segments_to_vtt(segments: list[dict], align_segments: Optional[list[dict]] = None) -> str:
-    """Convert transcript segments to rolling two-line WebVTT format.
+    """Convert transcript segments to WebVTT format.
 
-    If align_segments provided: merges segments with alignment timing, sorts by
-    scheduled_start_s (chronological order in the actual audio), then generates VTT.
-    
+    If align_segments provided: uses actual audio timeline (scheduled_start_s)
+    from the TTS assembly pass, so captions are in sync with what the viewer hears.
+
     Otherwise: uses original segment timing.
     """
-    # If we have alignment data, merge and sort by actual audio timeline
-    if align_segments and len(align_segments) == len(segments):
-        # Build list with both translation text and alignment timing
+    if align_segments:
+        # Build an index from segment index → align data for robust lookup
+        # (no length equality required — align list may differ if pipeline was
+        # re-run with different segmentation)
+        align_by_index: dict[int, dict] = {a["index"]: a for a in align_segments if "index" in a}
+
         merged = []
-        for i, seg in enumerate(segments):
-            if not seg.get("text", "").strip():
+        for seg in segments:
+            text = seg.get("text", "").strip()
+            if not text:
                 continue
-            align_seg = align_segments[i]
-            merged.append({
-                "start": align_seg["scheduled_start_s"],
-                "end": align_seg["scheduled_start_s"] + align_seg["target_sec"],
-                "text": seg["text"].strip(),
-            })
-        # Sort by chronological start time (this is the actual order in the dubbed audio)
+            idx = seg.get("id", seg.get("index"))
+            a = align_by_index.get(idx) if idx is not None else None
+            if a:
+                start = a["scheduled_start_s"]
+                end = start + a["raw_duration_s"]  # use actual audio duration, not target
+                end = max(end, start + 0.5)         # minimum 500ms visibility
+            else:
+                # Segment was not in align data — use original timing
+                start = seg.get("start", 0.0)
+                end = seg.get("end", start + 2.0)
+            merged.append({"start": start, "end": end, "text": text})
+
         merged.sort(key=lambda x: x["start"])
         segs = merged
     else:
-        # Fallback: use original segments in order
         segs = [s for s in segments if s.get("text", "").strip()]
-    
+
     if not segs:
         return "WEBVTT\n"
 
@@ -142,19 +150,12 @@ def _compute_speech_offset(title: str) -> float:
 async def get_captions(video_id: str):
     """Serve translated (target-language) captions as WebVTT.
 
-    Uses aligned timing from the most recent .align.json if available to ensure
-    subtitles are in chronological order matching the actual audio timeline.
-    Falls back to original segment order if align data is unavailable.
+    Always regenerates from the latest .align.json so captions are in sync
+    with the actual dubbed audio timeline. Never serves a stale cached file.
     """
     title = resolve_title(video_id)
     if title is None:
         raise HTTPException(status_code=404, detail=f"Video {video_id} not found")
-
-    vtt_dir = settings.dubbed_captions_dir
-    vtt_path = vtt_dir / f"{title}.vtt"
-
-    if vtt_path.exists():
-        return PlainTextResponse(vtt_path.read_text(), media_type="text/vtt")
 
     json_path = settings.translations_dir / f"{title}.json"
     if not json_path.exists():
@@ -163,8 +164,8 @@ async def get_captions(video_id: str):
     data = json.loads(json_path.read_text())
     segments = data.get("segments", [])
 
-    # Try to load aligned timing from the most recent .align.json
-    # This ensures subtitles follow the actual audio timeline order
+    # Always use the freshest .align.json — this is ground truth for what
+    # timestamps the TTS engine actually placed each segment at.
     align_segments = None
     align_json_path = _find_latest_align_json(title)
     if align_json_path:
@@ -172,21 +173,12 @@ async def get_captions(video_id: str):
             align_data = json.loads(align_json_path.read_text())
             align_segments = align_data.get("segments", [])
         except Exception:
-            pass  # Fall back to original order if align.json is malformed
-
-    # Apply YouTube caption timing offset if not using alignment
-    # (alignment data already incorporates proper timing)
-    if align_segments is None:
-        offset = _compute_speech_offset(title)
-        if offset > 0:
-            segments = [
-                {**seg, "start": seg["start"] + offset, "end": seg["end"] + offset}
-                for seg in segments
-            ]
+            pass
 
     vtt = _segments_to_vtt(segments, align_segments=align_segments)
+    vtt_dir = settings.dubbed_captions_dir
     vtt_dir.mkdir(parents=True, exist_ok=True)
-    vtt_path.write_text(vtt)
+    (vtt_dir / f"{title}.vtt").write_text(vtt)
     return PlainTextResponse(vtt, media_type="text/vtt")
 
 
