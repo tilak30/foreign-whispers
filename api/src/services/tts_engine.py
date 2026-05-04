@@ -506,53 +506,113 @@ def _load_en_transcript(es_source_path: str) -> dict:
         return json.load(f)
 
 
+def _find_transcript_path(es_source_path: str) -> "pathlib.Path | None":
+    """Locate the source transcription JSON, checking both whisper/ and flat paths."""
+    es_path = pathlib.Path(es_source_path)
+    data_dir = es_path.parent.parent.parent  # translations/{model}/ -> data_dir
+
+    whisper_path = data_dir / "transcriptions" / "whisper" / es_path.name
+    if whisper_path.exists():
+        return whisper_path
+    flat_path = data_dir / "transcriptions" / es_path.name
+    if flat_path.exists():
+        return flat_path
+    return None
+
+
 def _merge_speaker_labels(es_segments: list[dict], es_source_path: str) -> list[dict]:
     """Backfill ``speaker`` onto translation segments from the source transcription.
 
-    The translate router writes new segment dicts that only carry ``id``,
-    ``start``, ``end``, ``text`` — dropping the ``speaker`` field injected by
-    the transcribe step.  This function reloads the transcription JSON (which
-    does have ``speaker`` after the diarization fix) and copies the label onto
-    each translation segment by matching on segment index.
+    Matches by start-time proximity (within 0.5s) because the translation and
+    transcription pipelines produce different segment counts and id fields do
+    NOT correspond 1:1.  For each translation segment, finds the transcription
+    segment whose start time is closest and borrows its speaker label.
 
-    Matching is by index rather than timestamp because the segmentation is
-    identical between transcription and translation (translate router preserves
-    segment boundaries).
-
-    No-ops safely if the transcription JSON is missing or has no speaker field.
+    Falls back to synthetic parity (even=male, odd=female) if no speaker labels
+    exist in the transcription JSON yet (diarize not run / HF token missing).
     """
-    es_path = pathlib.Path(es_source_path)
-    data_dir = es_path.parent.parent.parent
-    en_path = data_dir / "transcriptions" / "whisper" / es_path.name
-    if not en_path.exists():
-        return es_segments
+    transcript_path = _find_transcript_path(es_source_path)
+    if transcript_path is None:
+        _logging.getLogger(__name__).warning(
+            "[tts] Transcription JSON not found at expected path — "
+            "using synthetic parity speaker assignment"
+        )
+        return _synthetic_speaker_fallback(es_segments)
+
     try:
-        with open(en_path) as f:
+        with open(transcript_path) as f:
             en_data = json.load(f)
     except Exception:
-        return es_segments
+        return _synthetic_speaker_fallback(es_segments)
 
     en_segs = en_data.get("segments", [])
     if not en_segs or "speaker" not in en_segs[0]:
-        # Transcription JSON has no speaker labels — fix not yet applied or
-        # the video was processed before the diarization step was added.
-        return es_segments
+        _logging.getLogger(__name__).warning(
+            "[tts] No speaker labels in transcription JSON — "
+            "diarize step has not run yet. Using synthetic parity assignment."
+        )
+        return _synthetic_speaker_fallback(es_segments)
 
-    # Build index → speaker map from the EN transcript
-    idx_to_speaker: dict[int, str] = {}
-    for seg in en_segs:
-        seg_id = seg.get("id")
-        speaker = seg.get("speaker")
-        if seg_id is not None and speaker:
-            idx_to_speaker[int(seg_id)] = speaker
+    # Build a sorted list of (start_time, speaker) from the transcription
+    en_starts: list[tuple[float, str]] = sorted(
+        (float(s["start"]), str(s["speaker"]))
+        for s in en_segs
+        if "start" in s and "speaker" in s
+    )
 
-    # Stamp speaker onto each ES segment (copy to avoid mutating in place)
+    if not en_starts:
+        return _synthetic_speaker_fallback(es_segments)
+
+    _MATCH_TOLERANCE_S = 0.5  # max seconds between translation and transcription segment starts
+
+    n_matched = 0
     out = []
     for seg in es_segments:
         seg_copy = dict(seg)
-        seg_id = seg_copy.get("id")
-        if seg_id is not None and seg_id in idx_to_speaker and "speaker" not in seg_copy:
-            seg_copy["speaker"] = idx_to_speaker[seg_id]
+        if "speaker" not in seg_copy:
+            try:
+                es_start = float(seg_copy["start"])
+            except (KeyError, TypeError, ValueError):
+                seg_copy["speaker"] = "SPEAKER_00"
+                out.append(seg_copy)
+                continue
+
+            # Find nearest transcription segment by start time
+            best_speaker = None
+            best_dist = float("inf")
+            for en_start, sp in en_starts:
+                dist = abs(es_start - en_start)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_speaker = sp
+
+            if best_speaker is not None and best_dist <= _MATCH_TOLERANCE_S:
+                seg_copy["speaker"] = best_speaker
+                n_matched += 1
+            else:
+                # No close match — fall back to parity by segment index
+                idx = len(out)
+                seg_copy["speaker"] = f"SPEAKER_{(idx % 2):02d}"
+
+        out.append(seg_copy)
+
+    print(f"[tts] Merged speaker labels: {n_matched}/{len(es_segments)} segments matched by start-time")
+    return out
+
+
+def _synthetic_speaker_fallback(segments: list[dict]) -> list[dict]:
+    """Assign alternating SPEAKER_00/SPEAKER_01 by segment index parity.
+
+    Used when no real diarization data is available.  Even index = male
+    (SPEAKER_00), odd index = female (SPEAKER_01).  Far better than
+    defaulting everything to male.
+    """
+    print("[tts] Synthetic speaker assignment: even segments=SPEAKER_00 (male), odd=SPEAKER_01 (female)")
+    out = []
+    for i, seg in enumerate(segments):
+        seg_copy = dict(seg)
+        if "speaker" not in seg_copy:
+            seg_copy["speaker"] = f"SPEAKER_{(i % 2):02d}"
         out.append(seg_copy)
     return out
 
@@ -696,11 +756,9 @@ def text_file_to_speech(
 
     segments = segments_from_file(source_path)
 
-    # Backfill speaker labels from the source transcription JSON.
-    # The translate router drops the ``speaker`` field when it writes new
-    # segment dicts, so without this step seg.get("speaker") is always None
-    # in the synthesis loop → gender is always None → every segment uses the
-    # male Edge TTS voice (es-ES-AlvaroNeural), ignoring female speakers entirely.
+    # Backfill speaker labels from transcription JSON using start-time matching.
+    # The translate router produces different segment counts than the transcription,
+    # so id-based matching fails — we match by nearest start timestamp instead.
     segments = _merge_speaker_labels(segments, source_path)
 
     if not segments:
