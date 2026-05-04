@@ -3,7 +3,10 @@
 [![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-Source_Available-blue.svg)](./LICENSE)
 
 > **NYU Spring 2026 — NLP Project**  
-> **Student:** Tilak Bhansali &nbsp;|&nbsp; **NetID:** `tb3525`
+>| **Student** | **NetID:** |
+>|---|---|
+>| Tilak Bhansali | tb3525 |
+>| Advait Jishnani | aj4700 |
 
 YouTube video dubbing pipeline — transcribe, translate, and dub videos into Spanish with gender-aware neural voices.
 
