@@ -8,9 +8,17 @@ and cuts it off — leaving ~85% of the audio as silence.
 _youtube_captions_to_segments() deduplicates the windows into a proper
 word stream, then re-segments at sentence boundaries (~15 words max) so every
 TTS segment has a real non-overlapping time window.
+
+Gender fix (2025-05): diarize_audio() + assign_speakers() are now called after
+every transcription path.  Speaker labels written into each segment dict allow
+text_file_to_speech() in tts_engine.py to pick the correct Edge TTS voice
+(es-ES-AlvaroNeural for male, es-ES-ElviraNeural for female) per segment.
+Without this, seg.get("speaker") was always None → gender defaulted to male
+for every segment in the dubbed audio.
 """
 
 import json
+import logging
 import pathlib
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -20,6 +28,8 @@ from api.src.core.dependencies import resolve_title
 from api.src.main import get_whisper_model
 from api.src.schemas.transcribe import TranscribeResponse, TranscribeSegment
 from api.src.services.transcription_service import TranscriptionService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -154,16 +164,99 @@ def _youtube_captions_to_segments(
     }
 
 
+def _inject_speaker_labels(result: dict, video_path: pathlib.Path) -> dict:
+    """Run pyannote diarization on the source audio and inject speaker labels.
+
+    Extracts a WAV from the video, runs diarize_audio(), then calls
+    assign_speakers() to stamp each segment with its speaker label.
+
+    Falls back gracefully:
+    - If pyannote is not installed or HF token is absent → uses
+      synthetic_diar_segments_from_transcript() to assign alternating
+      SPEAKER_00 / SPEAKER_01 labels based on segment index parity.
+      This is enough for the gender-parity heuristic in tts_engine.py
+      to produce alternating male/female voices, which is far better
+      than every segment getting the male default.
+    - If ffmpeg extraction fails → returns result unchanged (no speaker field).
+
+    The returned dict has the same structure as the input but each segment
+    dict gains a "speaker" key, e.g. "SPEAKER_00" or "SPEAKER_01".
+    """
+    from foreign_whispers.diarization import (
+        assign_speakers,
+        diarize_audio,
+        synthetic_diar_segments_from_transcript,
+    )
+
+    segments = result.get("segments", [])
+    if not segments:
+        return result
+
+    hf_token: str | None = settings.hf_token if hasattr(settings, "hf_token") else None
+
+    diar_intervals: list[dict] = []
+
+    # ── Try real pyannote diarization first ──────────────────────────────────
+    if hf_token:
+        # Extract a mono WAV next to the video for pyannote (it needs a plain
+        # audio file, not an MP4).  Use ffmpeg if available; skip silently if not.
+        audio_wav = video_path.with_suffix(".diar.wav")
+        try:
+            import subprocess
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-i", str(video_path),
+                    "-ac", "1", "-ar", "16000",
+                    "-vn", str(audio_wav),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            diar_intervals = diarize_audio(str(audio_wav), hf_token=hf_token)
+        except Exception as exc:
+            logger.warning("[transcribe] diarize_audio failed (%s), falling back to synthetic labels", exc)
+        finally:
+            # Clean up the temporary WAV regardless of success/failure
+            if audio_wav.exists():
+                audio_wav.unlink(missing_ok=True)
+    else:
+        logger.info(
+            "[transcribe] No HF_TOKEN configured — using synthetic speaker labels "
+            "(alternating SPEAKER_00/SPEAKER_01 by segment index). "
+            "Set HF_TOKEN in .env and accept pyannote/speaker-diarization-3.1 on "
+            "HuggingFace for real diarization."
+        )
+
+    # ── Synthetic fallback: alternating labels by segment index ─────────────
+    # Even when pyannote runs, diar_intervals may be empty (e.g. single speaker
+    # video, diarization failure).  In that case assign_speakers() already
+    # defaults all segments to SPEAKER_00, which means male voice everywhere —
+    # same as before.  The synthetic fallback at least gives two distinct
+    # speakers so the gender parity heuristic fires on odd-indexed segments.
+    if not diar_intervals:
+        # k=2 → alternates SPEAKER_00 (even, male) / SPEAKER_01 (odd, female)
+        diar_intervals = synthetic_diar_segments_from_transcript(segments, k=2)
+
+    result_with_speakers = dict(result)
+    result_with_speakers["segments"] = assign_speakers(segments, diar_intervals)
+    return result_with_speakers
+
+
 @router.post("/transcribe/{video_id}", response_model=TranscribeResponse)
 async def transcribe_endpoint(
     video_id: str,
     request: Request,
     use_youtube_captions: bool = Query(True, description="Use YouTube captions when available, skipping Whisper"),
+    diarize: bool = Query(True, description="Inject speaker labels via pyannote (or synthetic fallback)"),
 ):
     """Run Whisper transcription on a downloaded video.
 
     When use_youtube_captions is True (default), YouTube captions are used if
     available, skipping Whisper entirely. When False, Whisper always runs.
+
+    When diarize is True (default), speaker labels are injected into segments
+    via pyannote.audio (requires HF_TOKEN) or a synthetic alternating fallback.
+    Speaker labels drive gender-aware TTS voice selection downstream.
     """
     videos_dir = settings.videos_dir
     transcriptions_dir = settings.transcriptions_dir
@@ -175,38 +268,53 @@ async def transcribe_endpoint(
 
     transcript_path = transcriptions_dir / f"{title}.json"
 
-    # Return cached result if it exists
+    # Return cached result if it exists.
+    # NOTE: we do NOT short-circuit the cache when diarize=True if the cached
+    # transcript already has speaker labels — check for that first.
     if transcript_path.exists() and use_youtube_captions:
         data = json.loads(transcript_path.read_text())
-        return TranscribeResponse(
-            video_id=video_id,
-            language=data.get("language", "en"),
-            text=data.get("text", ""),
-            segments=data.get("segments", []),
-            skipped=True,
-        )
-
-    # Prefer YouTube captions (accurate timestamps, free, no GPU)
-    if use_youtube_captions:
-        yt_caption_path = settings.youtube_captions_dir / f"{title}.txt"
-        if yt_caption_path.exists():
-            result = _youtube_captions_to_segments(yt_caption_path)
-            transcript_path.write_text(json.dumps(result))
+        segs = data.get("segments", [])
+        already_diarized = segs and "speaker" in segs[0]
+        if already_diarized or not diarize:
+            # Cache hit and speaker labels already present (or not wanted).
             return TranscribeResponse(
                 video_id=video_id,
-                language=result["language"],
-                text=result["text"],
-                segments=result["segments"],
+                language=data.get("language", "en"),
+                text=data.get("text", ""),
+                segments=segs,
                 skipped=True,
             )
+        # Cache hit but missing speaker labels — fall through to re-diarize and
+        # overwrite.  This handles the case where the transcript was cached
+        # before this fix was deployed.
+        result = data
 
-    # Run Whisper STT
-    svc = TranscriptionService(
-        ui_dir=settings.data_dir,
-        whisper_model=get_whisper_model(request.app),
-    )
+    else:
+        result = None
+
     video_path = videos_dir / f"{title}.mp4"
-    result = svc.transcribe(str(video_path))
+
+    if result is None:
+        # Prefer YouTube captions (accurate timestamps, free, no GPU)
+        if use_youtube_captions:
+            yt_caption_path = settings.youtube_captions_dir / f"{title}.txt"
+            if yt_caption_path.exists():
+                result = _youtube_captions_to_segments(yt_caption_path)
+
+        if result is None:
+            # Run Whisper STT
+            svc = TranscriptionService(
+                ui_dir=settings.data_dir,
+                whisper_model=get_whisper_model(request.app),
+            )
+            result = svc.transcribe(str(video_path))
+
+    # ── Inject speaker labels (diarization) ─────────────────────────────────
+    # This is the step that was missing before.  Without it, seg.get("speaker")
+    # is always None in tts_engine.py, so gender is never inferred and every
+    # segment uses the male Edge TTS voice.
+    if diarize:
+        result = _inject_speaker_labels(result, video_path)
 
     transcript_path.write_text(json.dumps(result))
 
@@ -215,4 +323,5 @@ async def transcribe_endpoint(
         language=result.get("language", "en"),
         text=result.get("text", ""),
         segments=result.get("segments", []),
+        skipped=False,
     )

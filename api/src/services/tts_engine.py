@@ -506,6 +506,57 @@ def _load_en_transcript(es_source_path: str) -> dict:
         return json.load(f)
 
 
+def _merge_speaker_labels(es_segments: list[dict], es_source_path: str) -> list[dict]:
+    """Backfill ``speaker`` onto translation segments from the source transcription.
+
+    The translate router writes new segment dicts that only carry ``id``,
+    ``start``, ``end``, ``text`` — dropping the ``speaker`` field injected by
+    the transcribe step.  This function reloads the transcription JSON (which
+    does have ``speaker`` after the diarization fix) and copies the label onto
+    each translation segment by matching on segment index.
+
+    Matching is by index rather than timestamp because the segmentation is
+    identical between transcription and translation (translate router preserves
+    segment boundaries).
+
+    No-ops safely if the transcription JSON is missing or has no speaker field.
+    """
+    es_path = pathlib.Path(es_source_path)
+    data_dir = es_path.parent.parent.parent
+    en_path = data_dir / "transcriptions" / "whisper" / es_path.name
+    if not en_path.exists():
+        return es_segments
+    try:
+        with open(en_path) as f:
+            en_data = json.load(f)
+    except Exception:
+        return es_segments
+
+    en_segs = en_data.get("segments", [])
+    if not en_segs or "speaker" not in en_segs[0]:
+        # Transcription JSON has no speaker labels — fix not yet applied or
+        # the video was processed before the diarization step was added.
+        return es_segments
+
+    # Build index → speaker map from the EN transcript
+    idx_to_speaker: dict[int, str] = {}
+    for seg in en_segs:
+        seg_id = seg.get("id")
+        speaker = seg.get("speaker")
+        if seg_id is not None and speaker:
+            idx_to_speaker[int(seg_id)] = speaker
+
+    # Stamp speaker onto each ES segment (copy to avoid mutating in place)
+    out = []
+    for seg in es_segments:
+        seg_copy = dict(seg)
+        seg_id = seg_copy.get("id")
+        if seg_id is not None and seg_id in idx_to_speaker and "speaker" not in seg_copy:
+            seg_copy["speaker"] = idx_to_speaker[seg_id]
+        out.append(seg_copy)
+    return out
+
+
 def _build_alignment(en_transcript: dict, es_transcript: dict, silence_regions: list[dict] | None = None) -> tuple:
     """Run global_align_dp and return (metrics_list, {segment_index: AlignedSegment}).
 
@@ -644,6 +695,13 @@ def text_file_to_speech(
     print(f"generating {save_name}...", end="")
 
     segments = segments_from_file(source_path)
+
+    # Backfill speaker labels from the source transcription JSON.
+    # The translate router drops the ``speaker`` field when it writes new
+    # segment dicts, so without this step seg.get("speaker") is always None
+    # in the synthesis loop → gender is always None → every segment uses the
+    # male Edge TTS voice (es-ES-AlvaroNeural), ignoring female speakers entirely.
+    segments = _merge_speaker_labels(segments, source_path)
 
     if not segments:
         text = text_from_file(source_path)
